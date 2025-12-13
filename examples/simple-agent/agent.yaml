@@ -1,0 +1,10 @@
+name: simple-agent
+runtime: python3
+agent: agent.py
+
+memory: 256
+timeout: 30s
+
+description: |
+  A simple test agent for validating the AgentScale bridge.
+  No external dependencies required.

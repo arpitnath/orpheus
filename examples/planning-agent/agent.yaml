@@ -1,0 +1,12 @@
+name: planning-agent
+runtime: python3
+agent: planning_agent.py
+
+# Resource limits (used by isolate)
+memory: 512    # MB
+timeout: 120s  # 2 minutes for LLM calls
+
+# Description
+description: |
+  A planning agent that helps create business initiative plans.
+  Uses OpenAI Agents SDK with triage, launch_helper, and get_data sub-agents.
