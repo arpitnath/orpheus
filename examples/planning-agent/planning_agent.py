@@ -146,6 +146,7 @@ async def run_workflow(workflow_input: WorkflowInput):
       launch_helper_result = {
         "output_text": launch_helper_result_temp.final_output_as(str)
       }
+      return {"response": launch_helper_result["output_text"], "triage": triage_result["output_parsed"]}
     else:
       get_data_result_temp = await Runner.run(
         get_data,
@@ -162,3 +163,4 @@ async def run_workflow(workflow_input: WorkflowInput):
       get_data_result = {
         "output_text": get_data_result_temp.final_output_as(str)
       }
+      return {"response": get_data_result["output_text"], "needs_more_info": True, "triage": triage_result["output_parsed"]}
