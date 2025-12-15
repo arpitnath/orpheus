@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"agentscale/pkg/config"
 	"agentscale/pkg/generator"
@@ -24,9 +25,6 @@ type Runner struct {
 type RunOptions struct {
 	// Input is the JSON input string (if empty, reads from stdin)
 	Input string
-
-	// Async indicates whether to use async template
-	Async bool
 
 	// NoIsolate skips container isolation
 	NoIsolate bool
@@ -56,8 +54,8 @@ func (r *Runner) Run(ctx context.Context, opts *RunOptions) (*proxy.Result, erro
 		opts = &RunOptions{}
 	}
 
-	// Generate entry point
-	entrypointPath, err := r.generator.Generate(r.cfg, opts.Async)
+	// Generate entry point (unified template handles both sync and async)
+	entrypointPath, err := r.generator.Generate(r.cfg, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate entrypoint: %w", err)
 	}
@@ -82,10 +80,23 @@ func (r *Runner) Run(ctx context.Context, opts *RunOptions) (*proxy.Result, erro
 		input = string(data)
 	}
 
+	// Determine isolation settings
+	useIsolate := !opts.NoIsolate
+	isolatePath := ""
+	if useIsolate {
+		isolatePath = findIsolateBinary()
+		if isolatePath == "" {
+			// Fall back to no isolation if binary not found
+			useIsolate = false
+		}
+	}
+
 	// Execute agent
 	execOpts := &proxy.ExecuteOptions{
-		Input: input,
-		Env:   opts.Env,
+		Input:       input,
+		Env:         opts.Env,
+		UseIsolate:  useIsolate,
+		IsolatePath: isolatePath,
 	}
 
 	result := r.proxy.Execute(ctx, entrypointPath, execOpts)
@@ -108,6 +119,38 @@ func RunFromDir(ctx context.Context, agentDir string, opts *RunOptions) (*proxy.
 // Config returns the runner's configuration
 func (r *Runner) Config() *config.AgentConfig {
 	return r.cfg
+}
+
+// findIsolateBinary searches for the isolate binary in known locations
+func findIsolateBinary() string {
+	// Search order:
+	// 1. ./isolation/bin/isolate (relative to cwd - development)
+	// 2. ~/.agentscale/bin/isolate (user installation)
+	// 3. /usr/local/bin/isolate (system installation)
+
+	candidates := []string{
+		"./isolation/bin/isolate",
+	}
+
+	// Add user home directory path
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".agentscale", "bin", "isolate"))
+	}
+
+	// Add system path
+	candidates = append(candidates, "/usr/local/bin/isolate")
+
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			// Convert to absolute path
+			if abs, err := filepath.Abs(path); err == nil {
+				return abs
+			}
+			return path
+		}
+	}
+
+	return ""
 }
 
 // OutputJSON formats a result as JSON string

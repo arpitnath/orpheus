@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -22,6 +23,12 @@ type ExecuteOptions struct {
 
 	// WorkDir overrides the working directory
 	WorkDir string
+
+	// UseIsolate enables container isolation
+	UseIsolate bool
+
+	// IsolatePath is the path to the isolate binary
+	IsolatePath string
 }
 
 // RunAgent executes the agent with the given configuration and entry point
@@ -35,7 +42,18 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath strin
 	}
 
 	// Create command with context for timeout
-	cmd := exec.CommandContext(ctx, "python3", entrypointPath)
+	var cmd *exec.Cmd
+	if opts != nil && opts.UseIsolate && opts.IsolatePath != "" {
+		// Run inside isolate container
+		// isolate run --memory=512 "python3 /path/to/_entrypoint.py"
+		cmd = exec.CommandContext(ctx, opts.IsolatePath,
+			"run",
+			fmt.Sprintf("--memory=%d", cfg.Memory),
+			fmt.Sprintf("python3 %s", entrypointPath))
+	} else {
+		// Run directly (no isolation)
+		cmd = exec.CommandContext(ctx, "python3", entrypointPath)
+	}
 	cmd.Dir = workDir
 
 	// Set up stdin

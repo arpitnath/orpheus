@@ -40,7 +40,7 @@ func printUsage() {
 	fmt.Println(`agentscale-runtime - Agent execution runtime
 
 Usage:
-  agentscale-runtime run <agent-dir> [options]
+  agentscale-runtime run [options] <agent-dir>
   agentscale-runtime version
   agentscale-runtime help
 
@@ -53,12 +53,11 @@ Run Options:
   --memory <mb>     Override memory limit (default: from agent.yaml or 512)
   --timeout <sec>   Override timeout in seconds (default: from agent.yaml or 60)
   --no-isolate      Skip container isolation (run directly)
-  --async           Use async template for entry point
   --keep-entrypoint Keep generated _entrypoint.py after execution
 
 Examples:
-  echo '{"query": "hello"}' | agentscale-runtime run ./my-agent --no-isolate
-  agentscale-runtime run ./my-agent --timeout 120 --no-isolate`)
+  echo '{"query": "hello"}' | agentscale-runtime run --no-isolate ./my-agent
+  agentscale-runtime run --timeout 120 --no-isolate ./my-agent`)
 }
 
 func runCmd(args []string) {
@@ -68,7 +67,6 @@ func runCmd(args []string) {
 	memory := fs.Int("memory", 0, "Override memory limit in MB")
 	timeout := fs.Int("timeout", 0, "Override timeout in seconds")
 	noIsolate := fs.Bool("no-isolate", false, "Skip container isolation")
-	async := fs.Bool("async", false, "Use async template")
 	keepEntrypoint := fs.Bool("keep-entrypoint", false, "Keep generated _entrypoint.py")
 
 	// Parse flags
@@ -105,7 +103,6 @@ func runCmd(args []string) {
 
 	// Set up options
 	opts := &runner.RunOptions{
-		Async:          *async,
 		NoIsolate:      *noIsolate,
 		KeepEntrypoint: *keepEntrypoint,
 	}

@@ -33,7 +33,7 @@ echo ""
 
 # Test 1: Simple agent with valid input
 echo -n "Test 1: Simple agent - valid input... "
-output=$(echo '{"query": "hello"}' | "$RUNTIME" run "$PROJECT_DIR/examples/simple-agent" --no-isolate 2>&1)
+output=$(echo '{"query": "hello"}' | "$RUNTIME" run --no-isolate "$PROJECT_DIR/examples/simple-agent" 2>&1)
 if echo "$output" | grep -q '"status": "success"'; then
     echo -e "${GREEN}PASSED${NC}"
     PASSED=$((PASSED + 1))
@@ -45,7 +45,7 @@ fi
 
 # Test 2: Simple agent with empty input
 echo -n "Test 2: Simple agent - empty input... "
-output=$(echo '{}' | "$RUNTIME" run "$PROJECT_DIR/examples/simple-agent" --no-isolate 2>&1)
+output=$(echo '{}' | "$RUNTIME" run --no-isolate "$PROJECT_DIR/examples/simple-agent" 2>&1)
 if echo "$output" | grep -q '"status": "success"'; then
     echo -e "${GREEN}PASSED${NC}"
     PASSED=$((PASSED + 1))
@@ -57,7 +57,7 @@ fi
 
 # Test 3: Check output content
 echo -n "Test 3: Simple agent - output content... "
-output=$(echo '{"query": "test123"}' | "$RUNTIME" run "$PROJECT_DIR/examples/simple-agent" --no-isolate 2>&1)
+output=$(echo '{"query": "test123"}' | "$RUNTIME" run --no-isolate "$PROJECT_DIR/examples/simple-agent" 2>&1)
 if echo "$output" | grep -q "Processed: test123"; then
     echo -e "${GREEN}PASSED${NC}"
     PASSED=$((PASSED + 1))
