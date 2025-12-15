@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -43,8 +45,16 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath strin
 
 	// Create command with context for timeout
 	var cmd *exec.Cmd
-	if opts != nil && opts.UseIsolate && opts.IsolatePath != "" {
-		// Run inside isolate container
+	useIsolation := opts != nil && opts.UseIsolate && opts.IsolatePath != ""
+
+	// On macOS, VM isolation doesn't have Python yet - fall back to direct execution
+	if useIsolation && runtime.GOOS == "darwin" {
+		fmt.Fprintf(os.Stderr, "[agentscale] Warning: VM isolation on macOS doesn't have Python yet, running without isolation\n")
+		useIsolation = false
+	}
+
+	if useIsolation {
+		// Run inside isolate container (Linux namespace isolation)
 		// isolate run --memory=512 "python3 /path/to/_entrypoint.py"
 		cmd = exec.CommandContext(ctx, opts.IsolatePath,
 			"run",

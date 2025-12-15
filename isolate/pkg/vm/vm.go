@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"io"
+	"time"
 )
 
 // Config holds VM configuration
@@ -39,6 +40,9 @@ type VM interface {
 
 	// RunInteractive executes a command with stdin/stdout/stderr attached
 	RunInteractive(command string, stdin io.Reader, stdout, stderr io.Writer) error
+
+	// WaitForBoot waits for the VM to boot and be ready
+	WaitForBoot(timeout time.Duration) error
 }
 
 // Manager handles VM lifecycle

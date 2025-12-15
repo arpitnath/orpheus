@@ -4,6 +4,8 @@ package vm
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,12 +20,29 @@ import (
 
 // DarwinVM implements VM interface using Apple Virtualization.framework
 type DarwinVM struct {
-	config       *Config
-	machine      *vz.VirtualMachine
-	running      bool
-	mu           sync.Mutex
-	vsockPort    uint32
+	config        *Config
+	machine       *vz.VirtualMachine
+	running       bool
+	mu            sync.Mutex
+	vsockPort     uint32
+	vsockDevice   *vz.VirtioSocketDevice
 	vsockListener net.Listener
+}
+
+// vsockRequest is the JSON structure for commands sent to vsock-agent
+type vsockRequest struct {
+	Command string            `json:"command"`
+	Stdin   string            `json:"stdin,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	WorkDir string            `json:"workdir,omitempty"`
+}
+
+// vsockResponse is the JSON structure for responses from vsock-agent
+type vsockResponse struct {
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
+	Error    string `json:"error,omitempty"`
 }
 
 // DarwinManager implements Manager interface for macOS
@@ -128,9 +147,8 @@ func (v *DarwinVM) Start() error {
 	// Build kernel command line
 	// - console=hvc0: Use virtio console
 	// - rdinit=/init: Use our init script in initramfs
-	// - quiet: Suppress kernel boot messages
-	// - loglevel=0: Only show critical errors
-	cmdLine := "console=hvc0 rdinit=/init quiet loglevel=0"
+	// NOTE: Removed quiet and loglevel=0 to see boot messages for debugging
+	cmdLine := "console=hvc0 rdinit=/init"
 
 	// Create boot loader
 	bootLoader, err := vz.NewLinuxBootLoader(
@@ -194,6 +212,13 @@ func (v *DarwinVM) Start() error {
 	v.machine, err = vz.NewVirtualMachine(vmConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create VM: %w", err)
+	}
+
+	// Get vsock device from the machine
+	socketDevices := v.machine.SocketDevices()
+	if len(socketDevices) > 0 {
+		v.vsockDevice = socketDevices[0]
+		fmt.Printf("[vm] vsock device configured on port %d\n", v.vsockPort)
 	}
 
 	// Start VM in a goroutine and wait for it to be running
@@ -359,15 +384,77 @@ func (v *DarwinVM) IsRunning() bool {
 	return v.running
 }
 
-// Run executes a command inside the VM
+// Run executes a command inside the VM via vsock
 func (v *DarwinVM) Run(command string) (string, error) {
+	return v.RunWithStdin(command, "")
+}
+
+// RunWithStdin executes a command inside the VM with stdin input
+func (v *DarwinVM) RunWithStdin(command, stdin string) (string, error) {
 	if !v.IsRunning() {
 		return "", ErrNotRunning
 	}
 
-	// For now, commands are sent via serial console
-	// A more robust implementation would use vsock
-	return "", fmt.Errorf("Run not fully implemented - VM runs in interactive mode")
+	if v.vsockDevice == nil {
+		return "", fmt.Errorf("vsock device not available")
+	}
+
+	// Connect to vsock-agent inside VM
+	conn, err := v.vsockDevice.Connect(v.vsockPort)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to vsock: %w", err)
+	}
+	defer conn.Close()
+
+	// Create request
+	req := vsockRequest{
+		Command: command,
+		Stdin:   stdin,
+	}
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Send length-prefixed request
+	length := uint32(len(reqData))
+	if err := binary.Write(conn, binary.BigEndian, length); err != nil {
+		return "", fmt.Errorf("failed to write request length: %w", err)
+	}
+	if _, err := conn.Write(reqData); err != nil {
+		return "", fmt.Errorf("failed to write request: %w", err)
+	}
+
+	// Read length-prefixed response
+	var respLength uint32
+	if err := binary.Read(conn, binary.BigEndian, &respLength); err != nil {
+		return "", fmt.Errorf("failed to read response length: %w", err)
+	}
+
+	if respLength > 100*1024*1024 { // 100MB max
+		return "", fmt.Errorf("response too large: %d bytes", respLength)
+	}
+
+	respData := make([]byte, respLength)
+	if _, err := io.ReadFull(conn, respData); err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Parse response
+	var resp vsockResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	// Check for errors
+	if resp.Error != "" {
+		return "", fmt.Errorf("command failed: %s", resp.Error)
+	}
+	if resp.ExitCode != 0 {
+		return "", fmt.Errorf("command exited with code %d: %s", resp.ExitCode, resp.Stderr)
+	}
+
+	return resp.Stdout, nil
 }
 
 // RunInteractive executes a command with stdin/stdout/stderr attached

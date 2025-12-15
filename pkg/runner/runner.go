@@ -124,12 +124,16 @@ func (r *Runner) Config() *config.AgentConfig {
 // findIsolateBinary searches for the isolate binary in known locations
 func findIsolateBinary() string {
 	// Search order:
-	// 1. ./isolation/bin/isolate (relative to cwd - development)
-	// 2. ~/.agentscale/bin/isolate (user installation)
-	// 3. /usr/local/bin/isolate (system installation)
+	// 1. ./isolate/bin/isolate (embedded in agentscale - preferred)
+	// 2. ./isolation/bin/isolate (relative to cwd - development)
+	// 3. ../isolation/bin/isolate (sibling directory - monorepo development)
+	// 4. ~/.agentscale/bin/isolate (user installation)
+	// 5. /usr/local/bin/isolate (system installation)
 
 	candidates := []string{
+		"./isolate/bin/isolate",
 		"./isolation/bin/isolate",
+		"../isolation/bin/isolate",
 	}
 
 	// Add user home directory path
