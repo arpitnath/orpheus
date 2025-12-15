@@ -4,6 +4,7 @@ import typer
 
 from agentscale import __version__
 from agentscale.commands.run import run
+from agentscale.commands.client import invoke, status, health
 
 app = typer.Typer(
     name="agentscale",
@@ -36,6 +37,9 @@ def main(
 
 # Register commands
 app.command()(run)
+app.command()(invoke)
+app.command()(status)
+app.command()(health)
 
 
 if __name__ == "__main__":
