@@ -9,6 +9,7 @@ agentscale.egg-info/entry_points.txt
 agentscale.egg-info/requires.txt
 agentscale.egg-info/top_level.txt
 agentscale/commands/__init__.py
+agentscale/commands/client.py
 agentscale/commands/run.py
 agentscale/utils/__init__.py
 agentscale/utils/output.py
