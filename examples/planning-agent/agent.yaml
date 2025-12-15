@@ -1,12 +1,8 @@
 name: planning-agent
 runtime: python3
-agent: planning_agent.py
+module: planning_agent
+entrypoint: run_workflow
+input_type: WorkflowInput
 
-# Resource limits (used by isolate)
-memory: 512    # MB
-timeout: 120s  # 2 minutes for LLM calls
-
-# Description
-description: |
-  A planning agent that helps create business initiative plans.
-  Uses OpenAI Agents SDK with triage, launch_helper, and get_data sub-agents.
+memory: 512
+timeout: 120

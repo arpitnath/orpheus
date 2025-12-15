@@ -1,10 +1,7 @@
 name: simple-agent
 runtime: python3
-agent: agent.py
+module: agent
+entrypoint: handler
 
 memory: 256
-timeout: 30s
-
-description: |
-  A simple test agent for validating the AgentScale bridge.
-  No external dependencies required.
+timeout: 30

@@ -1,0 +1,2 @@
+[console_scripts]
+agentscale = agentscale.main:app
