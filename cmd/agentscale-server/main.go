@@ -16,28 +16,27 @@ import (
 
 func main() {
 	// Command-line flags
-	agentDir := flag.String("agent", ".", "Path to agent directory")
-	port := flag.String("port", "8080", "Server port")
-	tier := flag.String("tier", "pro", "Scaling tier (free/pro/teams)")
+	configPath := flag.String("config", "./agentscale.yaml", "Path to server config file")
 	flag.Parse()
 
-	// Validate tier
-	validTiers := map[string]bool{"free": true, "pro": true, "teams": true}
-	if !validTiers[*tier] {
-		log.Fatalf("Invalid tier: %s (valid: free, pro, teams)", *tier)
-	}
-
-	// Load agent configuration
-	cfg, err := config.Load(*agentDir)
+	// Load server configuration
+	serverCfg, err := config.LoadServerConfig(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load agent config from %s: %v", *agentDir, err)
+		log.Fatalf("Failed to load server config from %s: %v", *configPath, err)
 	}
 
-	log.Printf("Loaded agent: %s", cfg.Name)
+	log.Printf("Loaded server config with %d agents:", len(serverCfg.Agents))
+	for agentID, deployment := range serverCfg.Agents {
+		log.Printf("  - %s: %s (min=%d, max=%d, queue=%d)",
+			agentID,
+			deployment.AgentConfig.Name,
+			deployment.Scaling.MinWorkers,
+			deployment.Scaling.MaxWorkers,
+			deployment.Scaling.QueueSize)
+	}
 
 	// Create server
-	addr := ":" + *port
-	srv, err := server.New(cfg, addr, *tier)
+	srv, err := server.New(serverCfg)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
@@ -48,11 +47,12 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		log.Printf("Starting AgentScale server on %s (tier=%s)", addr, *tier)
+		log.Printf("Starting AgentScale multi-agent server on :%d", serverCfg.Server.Port)
 		log.Printf("Endpoints:")
-		log.Printf("  POST /invoke  - Execute agent")
-		log.Printf("  GET  /health  - Health check")
-		log.Printf("  GET  /stats   - Queue/pool statistics")
+		log.Printf("  POST /invoke?agent=<id>  - Execute agent")
+		log.Printf("  GET  /health             - List all agents")
+		log.Printf("  GET  /stats              - All agent stats")
+		log.Printf("  GET  /stats?agent=<id>   - Specific agent stats")
 
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)

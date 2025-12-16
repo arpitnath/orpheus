@@ -12,12 +12,18 @@ DEFAULT_SERVER = "http://localhost:8080"
 
 
 def invoke(
+    agent_id: str = typer.Argument(..., help="Agent ID to invoke"),
     input_data: str = typer.Argument(..., help="JSON input for the agent"),
     server: str = typer.Option(DEFAULT_SERVER, "--server", "-s", help="Server URL"),
     timeout: int = typer.Option(300, "--timeout", "-t", help="Request timeout in seconds"),
     raw: bool = typer.Option(False, "--raw", help="Output raw JSON without formatting"),
 ) -> None:
-    """Invoke an agent on a running AgentScale server."""
+    """Invoke an agent on a running AgentScale server.
+
+    Examples:
+        agentscale invoke planning-agent '{"query": "test"}'
+        agentscale invoke simple-agent '{"input": "hello"}' --server http://localhost:8080
+    """
 
     # Parse input (accept raw string or JSON)
     try:
@@ -26,7 +32,8 @@ def invoke(
         # Treat as raw string input
         parsed_input = {"input": input_data}
 
-    url = f"{server.rstrip('/')}/invoke"
+    # Build URL with agent query parameter
+    url = f"{server.rstrip('/')}/invoke?agent={agent_id}"
 
     try:
         with httpx.Client(timeout=timeout) as client:
@@ -38,7 +45,11 @@ def invoke(
                     print(json.dumps(result))
                 else:
                     status = result.get("status", "unknown")
-                    print_json(result, title=f"Result ({status})")
+                    print_json(result, title=f"Result from {agent_id} ({status})")
+            elif response.status_code == 404:
+                error_data = response.json()
+                print_error("Agent not found", error_data.get("error", f"Unknown agent: {agent_id}"))
+                raise typer.Exit(1)
             elif response.status_code == 503:
                 error_data = response.json()
                 print_error("Server unavailable", error_data.get("error", "Queue full"))
@@ -58,24 +69,39 @@ def invoke(
         raise typer.Exit(1)
 
 
-def status(
+def stats(
+    agent_id: Optional[str] = typer.Argument(None, help="Agent ID (optional, shows all if omitted)"),
     server: str = typer.Option(DEFAULT_SERVER, "--server", "-s", help="Server URL"),
     raw: bool = typer.Option(False, "--raw", help="Output raw JSON without formatting"),
 ) -> None:
-    """Get server status and statistics."""
+    """Get server statistics for one or all agents.
 
-    url = f"{server.rstrip('/')}/stats"
+    Examples:
+        agentscale stats                    # All agents
+        agentscale stats planning-agent     # Specific agent
+    """
+
+    if agent_id:
+        url = f"{server.rstrip('/')}/stats?agent={agent_id}"
+    else:
+        url = f"{server.rstrip('/')}/stats"
 
     try:
         with httpx.Client(timeout=10) as client:
             response = client.get(url)
 
             if response.status_code == 200:
-                stats = response.json()
+                stats_data = response.json()
                 if raw:
-                    print(json.dumps(stats))
+                    print(json.dumps(stats_data))
                 else:
-                    print_json(stats, title="Server Status")
+                    if agent_id:
+                        print_json(stats_data, title=f"Stats for {agent_id}")
+                    else:
+                        print_json(stats_data, title="All Agent Stats")
+            elif response.status_code == 404:
+                print_error("Agent not found", f"Unknown agent: {agent_id}")
+                raise typer.Exit(1)
             else:
                 print_error(f"Request failed ({response.status_code})", response.text)
                 raise typer.Exit(1)
@@ -88,7 +114,7 @@ def status(
 def health(
     server: str = typer.Option(DEFAULT_SERVER, "--server", "-s", help="Server URL"),
 ) -> None:
-    """Check server health."""
+    """Check server health and list all agents."""
 
     url = f"{server.rstrip('/')}/health"
 
@@ -98,9 +124,11 @@ def health(
 
             if response.status_code == 200:
                 data = response.json()
-                agent_id = data.get("agent_id", "unknown")
-                tier = data.get("tier", "unknown")
-                print_success(f"Server healthy - agent: {agent_id}, tier: {tier}")
+                agents = data.get("agents", [])
+
+                print_success(f"Server healthy - {len(agents)} agents:")
+                for agent in agents:
+                    print(f"  - {agent['id']}: {agent['name']} ({agent['workers']} workers)")
             else:
                 print_error("Server unhealthy", f"Status code: {response.status_code}")
                 raise typer.Exit(1)

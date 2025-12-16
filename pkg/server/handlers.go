@@ -21,6 +21,15 @@ func generateID() string {
 	return fmt.Sprintf("req-%d-%d", time.Now().UnixNano(), requestCounter.Add(1))
 }
 
+// extractAgentID gets agent ID from query parameter.
+func extractAgentID(r *http.Request) (string, error) {
+	agentID := r.URL.Query().Get("agent")
+	if agentID == "" {
+		return "", errors.New("missing required query parameter: agent")
+	}
+	return agentID, nil
+}
+
 // InvokeRequest is the expected JSON body for /invoke.
 type InvokeRequest struct {
 	Input json.RawMessage `json:"input"`
@@ -34,12 +43,26 @@ type InvokeResponse struct {
 	DurationMs int64          `json:"duration_ms,omitempty"`
 }
 
-// handleInvoke processes POST /invoke requests.
-// It enqueues the request and waits for a worker to process it.
+// handleInvoke processes POST /invoke?agent=<agent_id> requests.
+// It routes the request to the specified agent's queue and waits for response.
 func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	// Only accept POST
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Extract agent ID from query parameter
+	agentID, err := extractAgentID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Get agent instance
+	instance, err := s.getAgentInstance(agentID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -69,10 +92,11 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 		ResponseCh: make(chan *scaling.Response, 1),
 	}
 
-	// Enqueue the request
-	if err := s.queue.Enqueue(r.Context(), req); err != nil {
+	// Enqueue to agent's queue
+	if err := instance.queue.Enqueue(r.Context(), req); err != nil {
 		if errors.Is(err, scaling.ErrQueueFull) {
-			writeError(w, http.StatusServiceUnavailable, "queue is full, try again later")
+			writeError(w, http.StatusServiceUnavailable,
+				fmt.Sprintf("queue is full for agent %s, try again later", agentID))
 			return
 		}
 		if errors.Is(err, scaling.ErrQueueClosed) {
@@ -83,7 +107,7 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[handler] Enqueued request %s", req.ID)
+	log.Printf("[handler] Enqueued request %s to agent '%s'", req.ID, agentID)
 
 	// Wait for response
 	select {
@@ -110,31 +134,47 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HealthResponse is the JSON response for /health.
-type HealthResponse struct {
-	Status  string `json:"status"`
-	AgentID string `json:"agent_id"`
-	Tier    string `json:"tier"`
+// AgentHealthInfo represents health info for one agent.
+type AgentHealthInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Workers int    `json:"workers"`
 }
 
-// handleHealth returns the server's health status.
+// HealthResponse is the JSON response for /health.
+type HealthResponse struct {
+	Status string            `json:"status"`
+	Agents []AgentHealthInfo `json:"agents"`
+}
+
+// handleHealth returns the server's health status and lists all agents.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	agents := make([]AgentHealthInfo, 0, len(s.instances))
+	for agentID, instance := range s.instances {
+		agents = append(agents, AgentHealthInfo{
+			ID:      agentID,
+			Name:    instance.cfg.Name,
+			Workers: instance.pool.Size(),
+		})
+	}
+
 	writeJSON(w, http.StatusOK, HealthResponse{
-		Status:  "healthy",
-		AgentID: s.cfg.Name,
-		Tier:    s.tier,
+		Status: "healthy",
+		Agents: agents,
 	})
 }
 
 // StatsResponse is the JSON response for /stats.
 type StatsResponse struct {
 	AgentID string `json:"agent_id"`
-	Tier    string `json:"tier"`
 
 	// Queue stats
 	QueuePending    int  `json:"queue_pending"`
@@ -147,25 +187,88 @@ type StatsResponse struct {
 	PoolDesired int `json:"pool_desired"`
 }
 
+// AllStatsResponse is the JSON response for /stats with no agent specified.
+type AllStatsResponse struct {
+	Agents []StatsResponse `json:"agents"`
+	Global GlobalStats     `json:"global"`
+}
+
+// GlobalStats represents aggregate stats across all agents.
+type GlobalStats struct {
+	TotalWorkers    int `json:"total_workers"`
+	TotalPending    int `json:"total_pending"`
+	TotalProcessing int `json:"total_processing"`
+}
+
 // handleStats returns queue and pool statistics.
+// GET /stats?agent=<agent_id> - Stats for specific agent
+// GET /stats - Stats for all agents
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	queueStats := s.queue.GetStats()
-	poolStats := s.pool.GetStats()
+	agentID := r.URL.Query().Get("agent")
 
-	writeJSON(w, http.StatusOK, StatsResponse{
-		AgentID:         s.cfg.Name,
-		Tier:            s.tier,
-		QueuePending:    queueStats.PendingCount,
-		QueueProcessing: queueStats.ProcessingCount,
-		QueueTotal:      queueStats.PendingCount + queueStats.ProcessingCount,
-		QueueClosed:     queueStats.IsClosed,
-		PoolTotal:       poolStats.TotalWorkers,
-		PoolDesired:     poolStats.DesiredSize,
+	if agentID != "" {
+		// Stats for specific agent
+		instance, err := s.getAgentInstance(agentID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+
+		queueStats := instance.queue.GetStats()
+		poolStats := instance.pool.GetStats()
+
+		writeJSON(w, http.StatusOK, StatsResponse{
+			AgentID:         agentID,
+			QueuePending:    queueStats.PendingCount,
+			QueueProcessing: queueStats.ProcessingCount,
+			QueueTotal:      queueStats.PendingCount + queueStats.ProcessingCount,
+			QueueClosed:     queueStats.IsClosed,
+			PoolTotal:       poolStats.TotalWorkers,
+			PoolDesired:     poolStats.DesiredSize,
+		})
+		return
+	}
+
+	// All agents stats
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	allStats := make([]StatsResponse, 0, len(s.instances))
+	totalWorkers := 0
+	totalPending := 0
+	totalProcessing := 0
+
+	for agentID, instance := range s.instances {
+		queueStats := instance.queue.GetStats()
+		poolStats := instance.pool.GetStats()
+
+		allStats = append(allStats, StatsResponse{
+			AgentID:         agentID,
+			QueuePending:    queueStats.PendingCount,
+			QueueProcessing: queueStats.ProcessingCount,
+			QueueTotal:      queueStats.PendingCount + queueStats.ProcessingCount,
+			QueueClosed:     queueStats.IsClosed,
+			PoolTotal:       poolStats.TotalWorkers,
+			PoolDesired:     poolStats.DesiredSize,
+		})
+
+		totalWorkers += poolStats.TotalWorkers
+		totalPending += queueStats.PendingCount
+		totalProcessing += queueStats.ProcessingCount
+	}
+
+	writeJSON(w, http.StatusOK, AllStatsResponse{
+		Agents: allStats,
+		Global: GlobalStats{
+			TotalWorkers:    totalWorkers,
+			TotalPending:    totalPending,
+			TotalProcessing: totalProcessing,
+		},
 	})
 }
 
