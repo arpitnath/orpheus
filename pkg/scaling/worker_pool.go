@@ -26,6 +26,11 @@ type BasicWorkerPool struct {
 	scaleReason   string
 	metricsMu     sync.RWMutex
 
+	// Health tracking for auto-replacement
+	replacementAttempts map[string]int
+	lastReplacementTime time.Time
+	replacementMu       sync.RWMutex
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -37,13 +42,15 @@ func NewWorkerPool(agentID string, spawner WorkerSpawner, policy ScalingPolicy) 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	p := &BasicWorkerPool{
-		agentID:     agentID,
-		spawner:     spawner,
-		policy:      policy,
-		workers:     make(map[string]Worker),
-		idleWorkers: make(chan Worker, policy.MaxWorkers),
-		ctx:         ctx,
-		cancel:      cancel,
+		agentID:             agentID,
+		spawner:             spawner,
+		policy:              policy,
+		workers:             make(map[string]Worker),
+		idleWorkers:         make(chan Worker, policy.MaxWorkers),
+		replacementAttempts: make(map[string]int),
+		lastReplacementTime: time.Now(),
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 
 	// Set initial desired size
@@ -381,5 +388,88 @@ func (p *BasicWorkerPool) performMaintenance() {
 		if removed > 0 {
 			log.Printf("[pool] %s: removed %d idle workers", p.agentID, removed)
 		}
+	}
+
+	// Health check all workers
+	p.performHealthCheck()
+}
+
+// performHealthCheck checks the health of all workers and triggers replacement for unhealthy ones.
+func (p *BasicWorkerPool) performHealthCheck() {
+	p.workersMu.RLock()
+	workers := make([]Worker, 0, len(p.workers))
+	for _, w := range p.workers {
+		workers = append(workers, w)
+	}
+	p.workersMu.RUnlock()
+
+	for _, worker := range workers {
+		if worker.Health() == HealthUnhealthy {
+			go p.replaceUnhealthyWorker(worker)
+		}
+	}
+}
+
+// replaceUnhealthyWorker removes an unhealthy worker and spawns a replacement.
+// It includes rate limiting and max attempt tracking to prevent replacement storms.
+func (p *BasicWorkerPool) replaceUnhealthyWorker(worker Worker) {
+	workerID := worker.ID()
+
+	// Rate limiting: prevent replacement storms with 5s global cooldown
+	p.replacementMu.Lock()
+	if time.Since(p.lastReplacementTime) < 5*time.Second {
+		p.replacementMu.Unlock()
+		log.Printf("[pool] %s: rate limiting replacement for %s", p.agentID, workerID)
+		return
+	}
+	p.lastReplacementTime = time.Now()
+
+	// Track replacement attempts per worker
+	attempts := p.replacementAttempts[workerID]
+	if attempts >= 3 {
+		// Max attempts reached - give up and clean up tracking
+		delete(p.replacementAttempts, workerID)
+		p.replacementMu.Unlock()
+		log.Printf("[pool] %s: max replacement attempts (3) reached for %s, giving up", p.agentID, workerID)
+		return
+	}
+	p.replacementAttempts[workerID] = attempts + 1
+	p.replacementMu.Unlock()
+
+	log.Printf("[pool] %s: replacing unhealthy worker %s (attempt %d/3)", p.agentID, workerID, attempts+1)
+
+	// Remove the unhealthy worker
+	if err := p.removeWorker(workerID); err != nil {
+		log.Printf("[pool] %s: failed to remove unhealthy worker %s: %v", p.agentID, workerID, err)
+		return
+	}
+
+	// Check if we should spawn a replacement
+	if p.Size() < p.policy.MinWorkers || p.Size() < p.DesiredSize() {
+		// Spawn replacement with linear backoff
+		for attempt := 1; attempt <= 3; attempt++ {
+			err := p.spawnWorker()
+			if err == nil {
+				// Success - clear attempt counter
+				p.replacementMu.Lock()
+				delete(p.replacementAttempts, workerID)
+				p.replacementMu.Unlock()
+				log.Printf("[pool] %s: successfully spawned replacement worker", p.agentID)
+				return
+			}
+
+			log.Printf("[pool] %s: failed to spawn replacement (attempt %d/3): %v", p.agentID, attempt, err)
+
+			// Linear backoff before retry
+			if attempt < 3 {
+				backoff := time.Duration(attempt) * time.Second
+				time.Sleep(backoff)
+			}
+		}
+
+		log.Printf("[pool] %s: failed to spawn replacement after 3 attempts", p.agentID)
+	} else {
+		log.Printf("[pool] %s: no replacement needed (size=%d, min=%d, desired=%d)",
+			p.agentID, p.Size(), p.policy.MinWorkers, p.DesiredSize())
 	}
 }

@@ -19,9 +19,10 @@ type AgentWorker struct {
 	cfg     *config.AgentConfig
 	rnr     *runner.Runner
 
-	lastUsed atomic.Int64 // Unix nano timestamp
-	idle     atomic.Bool  // Currently idle
-	health   atomic.Int32 // HealthStatus as int32
+	lastUsed            atomic.Int64 // Unix nano timestamp
+	idle                atomic.Bool  // Currently idle
+	health              atomic.Int32 // HealthStatus as int32
+	consecutiveFailures atomic.Int32 // Track failures for degradation
 
 	mu       sync.Mutex // Protects shutdown state
 	shutdown bool
@@ -94,14 +95,30 @@ func (w *AgentWorker) Execute(ctx context.Context, input []byte) (*Result, error
 	})
 
 	if err != nil {
-		w.health.Store(int32(HealthUnhealthy))
+		// Track consecutive failures for degradation
+		failures := w.consecutiveFailures.Add(1)
+		if failures >= 3 {
+			// After 3 consecutive failures, mark as unhealthy
+			w.health.Store(int32(HealthUnhealthy))
+		} else {
+			// First or second failure - mark as degraded
+			w.health.Store(int32(HealthDegraded))
+		}
 		return nil, err
 	}
 
 	// Check for error status in result
 	if proxyResult.Status == "error" || proxyResult.Status == "timeout" {
-		w.health.Store(int32(HealthDegraded))
+		// Track failures for non-fatal errors
+		failures := w.consecutiveFailures.Add(1)
+		if failures >= 3 {
+			w.health.Store(int32(HealthUnhealthy))
+		} else {
+			w.health.Store(int32(HealthDegraded))
+		}
 	} else {
+		// Success - reset failure counter and mark healthy
+		w.consecutiveFailures.Store(0)
 		w.health.Store(int32(HealthHealthy))
 	}
 
