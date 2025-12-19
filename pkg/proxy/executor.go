@@ -6,9 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
@@ -31,6 +29,9 @@ type ExecuteOptions struct {
 
 	// IsolatePath is the path to the isolate binary
 	IsolatePath string
+
+	// RootFSPath is the path to agent image for --rootfs flag
+	RootFSPath string
 }
 
 // RunAgent executes the agent with the given configuration and entry point
@@ -46,20 +47,29 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath strin
 	// Create command with context for timeout
 	var cmd *exec.Cmd
 	useIsolation := opts != nil && opts.UseIsolate && opts.IsolatePath != ""
-
-	// On macOS, VM isolation doesn't have Python yet - fall back to direct execution
-	if useIsolation && runtime.GOOS == "darwin" {
-		fmt.Fprintf(os.Stderr, "[agentscale] Warning: VM isolation on macOS doesn't have Python yet, running without isolation\n")
-		useIsolation = false
-	}
+	hasRootFS := opts != nil && opts.RootFSPath != ""
 
 	if useIsolation {
-		// Run inside isolate container (Linux namespace isolation)
-		// isolate run --memory=512 "python3 /path/to/_entrypoint.py"
-		cmd = exec.CommandContext(ctx, opts.IsolatePath,
-			"run",
-			fmt.Sprintf("--memory=%d", cfg.Memory),
-			fmt.Sprintf("python3 %s", entrypointPath))
+		// Build isolate command with --rootfs if agent image available
+		args := []string{"run", fmt.Sprintf("--memory=%d", cfg.Memory)}
+
+		if hasRootFS {
+			// Add --rootfs flag for true filesystem isolation
+			args = append(args, fmt.Sprintf("--rootfs=%s", opts.RootFSPath))
+			// Entrypoint path inside container
+			entrypointPath = "/agent/_entrypoint.py"
+		}
+
+		args = append(args, fmt.Sprintf("python3 %s", entrypointPath))
+		cmd = exec.CommandContext(ctx, opts.IsolatePath, args...)
+
+		// Set PYTHONPATH for packages and agent code
+		if hasRootFS {
+			cmd.Env = append(cmd.Environ(),
+				"PYTHONPATH=/packages:/agent",
+				"PYTHONUNBUFFERED=1",
+				"PYTHONDONTWRITEBYTECODE=1")
+		}
 	} else {
 		// Run directly (no isolation)
 		cmd = exec.CommandContext(ctx, "python3", entrypointPath)

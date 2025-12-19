@@ -14,10 +14,11 @@ import (
 // AgentWorker implements the Worker interface by wrapping an existing Runner.
 // Each worker maintains its own Runner instance for executing agent tasks.
 type AgentWorker struct {
-	id      string
-	agentID string
-	cfg     *config.AgentConfig
-	rnr     *runner.Runner
+	id        string
+	agentID   string
+	cfg       *config.AgentConfig
+	rnr       *runner.Runner
+	imagePath string // Path to agent image for --rootfs
 
 	lastUsed            atomic.Int64 // Unix nano timestamp
 	idle                atomic.Bool  // Currently idle
@@ -29,14 +30,15 @@ type AgentWorker struct {
 }
 
 // newAgentWorker creates a new AgentWorker with the given configuration.
-func newAgentWorker(id, agentID string, cfg *config.AgentConfig) (*AgentWorker, error) {
+func newAgentWorker(id, agentID string, cfg *config.AgentConfig, imagePath string) (*AgentWorker, error) {
 	rnr := runner.New(cfg)
 
 	w := &AgentWorker{
-		id:      id,
-		agentID: agentID,
-		cfg:     cfg,
-		rnr:     rnr,
+		id:        id,
+		agentID:   agentID,
+		cfg:       cfg,
+		rnr:       rnr,
+		imagePath: imagePath,
 	}
 
 	// Initialize state
@@ -91,7 +93,8 @@ func (w *AgentWorker) Execute(ctx context.Context, input []byte) (*Result, error
 
 	// Run via existing Runner
 	proxyResult, err := w.rnr.Run(ctx, &runner.RunOptions{
-		Input: string(input), // []byte → string conversion
+		Input:     string(input), // []byte → string conversion
+		ImagePath: w.imagePath,   // Pass image path for --rootfs
 	})
 
 	if err != nil {
@@ -151,16 +154,18 @@ func (w *AgentWorker) Shutdown(ctx context.Context) error {
 
 // AgentSpawner implements WorkerSpawner for creating AgentWorker instances.
 type AgentSpawner struct {
-	cfg     *config.AgentConfig
-	agentID string
-	counter atomic.Int64 // For unique worker IDs
+	cfg       *config.AgentConfig
+	agentID   string
+	imagePath string      // Path to agent image
+	counter   atomic.Int64 // For unique worker IDs
 }
 
 // NewAgentSpawner creates a new spawner for the given agent configuration.
-func NewAgentSpawner(cfg *config.AgentConfig) *AgentSpawner {
+func NewAgentSpawner(cfg *config.AgentConfig, imagePath string) *AgentSpawner {
 	return &AgentSpawner{
-		cfg:     cfg,
-		agentID: cfg.Name,
+		cfg:       cfg,
+		agentID:   cfg.Name,
+		imagePath: imagePath,
 	}
 }
 
@@ -171,7 +176,7 @@ func (s *AgentSpawner) SpawnWorker(ctx context.Context, agentID string) (Worker,
 	workerID := fmt.Sprintf("%s-worker-%d", agentID, count)
 
 	// Create the worker
-	worker, err := newAgentWorker(workerID, agentID, s.cfg)
+	worker, err := newAgentWorker(workerID, agentID, s.cfg, s.imagePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create worker %s: %w", workerID, err)
 	}

@@ -37,6 +37,9 @@ type RunOptions struct {
 
 	// Stdin is an optional reader for input (defaults to os.Stdin)
 	Stdin io.Reader
+
+	// ImagePath is the path to agent image for --rootfs
+	ImagePath string
 }
 
 // New creates a new Runner for the given agent configuration
@@ -97,6 +100,7 @@ func (r *Runner) Run(ctx context.Context, opts *RunOptions) (*proxy.Result, erro
 		Env:         opts.Env,
 		UseIsolate:  useIsolate,
 		IsolatePath: isolatePath,
+		RootFSPath:  opts.ImagePath,
 	}
 
 	result := r.proxy.Execute(ctx, entrypointPath, execOpts)

@@ -127,8 +127,8 @@ func (s *Server) createAgentInstance(
 	// Create queue
 	queue := scaling.NewRequestQueue(agentID, deployment.Scaling.QueueSize)
 
-	// Create spawner
-	spawner := scaling.NewAgentSpawner(deployment.AgentConfig)
+	// Create spawner with image path
+	spawner := scaling.NewAgentSpawner(deployment.AgentConfig, deployment.ImagePath)
 
 	// Create pool
 	pool := scaling.NewWorkerPool(agentID, spawner, policy)

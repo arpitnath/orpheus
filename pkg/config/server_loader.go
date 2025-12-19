@@ -39,19 +39,56 @@ func LoadServerConfig(configPath string) (*ServerConfig, error) {
 	// 4. Load each agent's agent.yaml
 	baseDir := filepath.Dir(absPath)
 	for agentID, deployment := range cfg.Agents {
-		agentPath := deployment.Path
-		if !filepath.IsAbs(agentPath) {
-			agentPath = filepath.Join(baseDir, agentPath)
-		}
+		var agentCfg *AgentConfig
+		var agentPath string
 
-		agentCfg, err := Load(agentPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load agent %s from %s: %w", agentID, agentPath, err)
+		// Handle deployed image vs code directory
+		if deployment.Image != "" {
+			// Deployed agent: Load config from image manifest
+			deployment.ImagePath = deployment.Image
+
+			// Validate image exists
+			if _, err := os.Stat(deployment.ImagePath); err != nil {
+				return nil, fmt.Errorf("agent %s: deployed image not found at %s", agentID, deployment.ImagePath)
+			}
+
+			// Load agent.yaml from image (if exists) or create minimal config
+			agentYamlPath := filepath.Join(deployment.ImagePath, "agent", "agent.yaml")
+			if _, err := os.Stat(agentYamlPath); err == nil {
+				agentCfg, err = LoadFromFile(agentYamlPath)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load agent %s from image: %w", agentID, err)
+				}
+			} else {
+				// Create minimal config for deployed agent
+				agentCfg = &AgentConfig{
+					Name:    agentID,
+					Runtime: RuntimePython3,
+				}
+			}
+
+			log.Printf("[config] Using deployed image for '%s': %s", agentID, deployment.ImagePath)
+		} else if deployment.Path != "" {
+			// Backward compat: code directory
+			agentPath = deployment.Path
+			if !filepath.IsAbs(agentPath) {
+				agentPath = filepath.Join(baseDir, agentPath)
+			}
+
+			var err error
+			agentCfg, err = Load(agentPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load agent %s from %s: %w", agentID, agentPath, err)
+			}
+
+			deployment.ImagePath = ""
+			log.Printf("[config] Using code directory for '%s': %s", agentID, agentPath)
+		} else {
+			return nil, fmt.Errorf("agent %s: must specify either 'image' or 'path'", agentID)
 		}
 
 		deployment.AgentConfig = agentCfg
 		cfg.Agents[agentID] = deployment
-		log.Printf("[config] Loaded agent '%s' from %s", agentID, agentPath)
 	}
 
 	// 5. Apply defaults

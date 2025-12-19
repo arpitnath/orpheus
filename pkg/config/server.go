@@ -30,12 +30,14 @@ type IsolationDefaults struct {
 
 // AgentDeployment represents one agent's deployment config
 type AgentDeployment struct {
-	Path      string             `yaml:"path"`
+	Path      string             `yaml:"path,omitempty"`      // OLD: agent code directory (backward compat)
+	Image     string             `yaml:"image,omitempty"`     // NEW: deployed agent image path
 	Scaling   ScalingConfig      `yaml:"scaling"`
 	Isolation *IsolationOverride `yaml:"isolation,omitempty"`
 
 	// Internal (populated during load)
 	AgentConfig *AgentConfig `yaml:"-"`
+	ImagePath   string       `yaml:"-"` // Resolved image path (from Image or Path)
 }
 
 // ScalingConfig defines scaling behavior for an agent
