@@ -10,6 +10,9 @@ agentscale.egg-info/requires.txt
 agentscale.egg-info/top_level.txt
 agentscale/commands/__init__.py
 agentscale/commands/client.py
+agentscale/commands/deploy.py
 agentscale/commands/run.py
 agentscale/utils/__init__.py
+agentscale/utils/builder.py
+agentscale/utils/config_updater.py
 agentscale/utils/output.py
