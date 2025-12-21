@@ -1,0 +1,6 @@
+name: calculator-agent
+runtime: python3
+module: calculator
+entrypoint: handler
+memory: 256
+timeout: 60
