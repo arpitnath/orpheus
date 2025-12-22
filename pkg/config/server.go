@@ -4,8 +4,8 @@ import "time"
 
 // ServerConfig represents the complete agentscale.yaml configuration
 type ServerConfig struct {
-	Server ServerSection                `yaml:"server"`
-	Agents map[string]AgentDeployment   `yaml:"agents"`
+	Server ServerSection              `yaml:"server"`
+	Agents map[string]AgentDeployment `yaml:"agents"`
 }
 
 // ServerSection contains server-level configuration
@@ -30,8 +30,8 @@ type IsolationDefaults struct {
 
 // AgentDeployment represents one agent's deployment config
 type AgentDeployment struct {
-	Path      string             `yaml:"path,omitempty"`      // OLD: agent code directory (backward compat)
-	Image     string             `yaml:"image,omitempty"`     // NEW: deployed agent image path
+	Path      string             `yaml:"path,omitempty"`  // OLD: agent code directory (backward compat)
+	Image     string             `yaml:"image,omitempty"` // NEW: deployed agent image path
 	Scaling   ScalingConfig      `yaml:"scaling"`
 	Isolation *IsolationOverride `yaml:"isolation,omitempty"`
 

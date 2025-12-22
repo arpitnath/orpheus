@@ -9,11 +9,18 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"time"
 
 	"agentscale/pkg/oci"
-	"agentscale/pkg/proxy"
 )
+
+// RuncResult holds the raw output from runc execution
+type RuncResult struct {
+	Stdout   string
+	Stderr   string
+	Err      error
+	ExitCode int
+	OOMKill  bool // True if exit code 137 (OOM killed)
+}
 
 // RuncRuntime wraps the runc binary for OCI container execution
 type RuncRuntime struct {
@@ -50,14 +57,12 @@ func (r *RuncRuntime) Available() bool {
 //   - ctx: Context for cancellation/timeout
 //   - bundle: OCI bundle (from pkg/oci)
 //   - input: JSON input to pass via stdin
-//   - monitor: Activity monitor for idle timeout (can be nil)
+//   - monitor: Activity monitor interface for idle timeout (can be nil)
 //
 // Returns:
-//   - *proxy.Result: Execution result with output/error
-//   - error: If container creation/execution fails
-func (r *RuncRuntime) Run(ctx context.Context, bundle *oci.Bundle, input string, monitor *proxy.ActivityMonitor) (*proxy.Result, error) {
-	startTime := time.Now()
-
+//   - *RuncResult: Raw execution result
+//   - error: If container creation/execution fails at system level
+func (r *RuncRuntime) Run(ctx context.Context, bundle *oci.Bundle, input string, monitor ActivityMonitorReader) (*RuncResult, error) {
 	// Build runc command: runc run --bundle <path> <containerID>
 	cmd := exec.CommandContext(ctx, r.BinaryPath, "run", "--bundle", bundle.Path, bundle.ID)
 	cmd.Stdin = strings.NewReader(input)
@@ -103,29 +108,31 @@ func (r *RuncRuntime) Run(ctx context.Context, bundle *oci.Bundle, input string,
 	// Wait for output capture to complete
 	wg.Wait()
 	runErr := cmd.Wait()
-	duration := time.Since(startTime)
 
 	// Always cleanup container (best effort, ignore errors)
 	r.Delete(bundle.ID)
 
-	// Handle execution error
+	// Determine exit code
+	exitCode := 0
+	oomKill := false
 	if runErr != nil {
-		exitCode := 1
+		exitCode = 1
 		if exitErr, ok := runErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		}
-
 		// Check for OOM kill (exit code 137 = 128 + 9 SIGKILL)
-		errMsg := runErr.Error()
 		if exitCode == 137 {
-			errMsg = "OOM killed: agent exceeded memory limit"
+			oomKill = true
 		}
-
-		return proxy.NewErrorResult(errMsg, stderr.String(), exitCode, duration), nil
 	}
 
-	// Process successful result
-	return proxy.ProcessResult(stdout.String(), stderr.String(), nil, duration), nil
+	return &RuncResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		Err:      runErr,
+		ExitCode: exitCode,
+		OOMKill:  oomKill,
+	}, nil
 }
 
 // Delete force-deletes a container by ID

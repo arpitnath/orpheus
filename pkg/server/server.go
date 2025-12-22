@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"agentscale/pkg/config"
+	"agentscale/pkg/runtime"
 	"agentscale/pkg/scaling"
 )
 
@@ -159,6 +160,9 @@ func (s *Server) setupRoutes() {
 
 // Start begins the server, starting all components and the HTTP listener.
 func (s *Server) Start() error {
+	// 0. Clean orphaned containers and bundles from previous runs (crash safety)
+	runtime.CleanupOrphanedContainers()
+
 	// 1. Start shared autoscaler
 	if err := s.autoscaler.Start(s.ctx); err != nil {
 		return err

@@ -7,12 +7,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"agentscale/pkg/config"
+	"agentscale/pkg/oci"
+	"agentscale/pkg/runtime"
 )
 
 // ExecuteOptions holds options for agent execution
@@ -46,12 +52,61 @@ type ExecuteOptions struct {
 	ActivityCheck time.Duration // Activity check interval
 }
 
-// RunAgent executes the agent with the given configuration and entry point
-// Uses activity-based timeout if IdleTimeout is configured, otherwise uses simple execution
+// RunAgent executes the agent with the given configuration and entry point.
+// Uses platform-based runtime selection:
+//   - Linux + UseIsolate + RootFSPath: Use runc container (new path)
+//   - Linux + UseIsolate + IsolatePath: Use legacy isolate binary
+//   - macOS + UseIsolate: Use Docker (Phase 4) or warn and run direct
+//   - Default: Run directly without isolation
 func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions) *Result {
-	// Check if activity-based timeout is enabled
-	useActivityTimeout := opts != nil && opts.IdleTimeout > 0
+	startTime := time.Now()
 
+	// Activity monitor setup (if enabled)
+	var monitor *ActivityMonitor
+	useActivityTimeout := opts != nil && opts.IdleTimeout > 0
+	if useActivityTimeout {
+		monitor = NewActivityMonitor(opts.IdleTimeout, opts.MaxTimeout, opts.ActivityCheck)
+		defer monitor.Stop()
+	}
+
+	// Check if we should use new runc path (Linux + UseIsolate + RootFSPath + no legacy IsolatePath)
+	useNewRuncPath := opts != nil &&
+		opts.UseIsolate &&
+		opts.RootFSPath != "" &&
+		opts.IsolatePath == "" &&
+		goruntime.GOOS == "linux"
+
+	// Platform-based runtime selection
+	switch goruntime.GOOS {
+	case "linux":
+		if useNewRuncPath {
+			if runtime.RuncAvailable() {
+				if useActivityTimeout {
+					return runWithRuncAndMonitor(ctx, cfg, opts, monitor, startTime)
+				}
+				return runWithRunc(ctx, cfg, opts, startTime)
+			}
+			log.Println("WARN: runc not found, running without isolation")
+			if useActivityTimeout {
+				return runDirectExecWithMonitor(ctx, cfg, entrypointPath, opts, monitor, startTime)
+			}
+			return runDirectExec(ctx, cfg, entrypointPath, opts, startTime)
+		}
+		// Fall through to legacy path (uses buildCommand with IsolatePath)
+
+	case "darwin":
+		if opts != nil && opts.UseIsolate && opts.RootFSPath != "" && opts.IsolatePath == "" {
+			// TODO: Phase 4 - Add Docker support for macOS
+			log.Println("WARN: macOS - running without isolation (dev mode)")
+			if useActivityTimeout {
+				return runDirectExecWithMonitor(ctx, cfg, entrypointPath, opts, monitor, startTime)
+			}
+			return runDirectExec(ctx, cfg, entrypointPath, opts, startTime)
+		}
+		// Fall through to legacy path
+	}
+
+	// Legacy path: Use existing buildCommand approach (for backward compatibility)
 	if useActivityTimeout {
 		return runAgentWithActivityMonitor(ctx, cfg, entrypointPath, opts)
 	}
@@ -261,6 +316,100 @@ func runAgentWithActivityMonitor(ctx context.Context, cfg *config.AgentConfig, e
 		wg.Wait() // Wait for goroutines to finish
 		return NewTimeoutResult(time.Since(startTime))
 	}
+}
+
+// runWithRunc executes an agent in a runc container (Linux isolation).
+// Uses UUID-based container IDs for crash safety.
+func runWithRunc(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOptions, startTime time.Time) *Result {
+	// Generate UUID-based container ID (prevents collisions)
+	containerID := fmt.Sprintf("agent-%s", uuid.New().String())
+
+	// Generate OCI bundle
+	bundleGen := oci.NewBundleGenerator()
+	bundle, err := bundleGen.GenerateBundle(cfg, opts.RootFSPath, containerID)
+	if err != nil {
+		return NewErrorResult(fmt.Sprintf("bundle generation: %v", err), "", 1, time.Since(startTime))
+	}
+	defer bundle.Cleanup()
+
+	// Get input
+	input := "{}"
+	if opts != nil && opts.Input != "" {
+		input = opts.Input
+	}
+
+	// Run with runc (no activity monitor)
+	runc := runtime.NewRunc()
+	runcResult, err := runc.Run(ctx, bundle, input, nil)
+	if err != nil {
+		return NewErrorResult(err.Error(), "", 1, time.Since(startTime))
+	}
+
+	// Convert runc result to proxy result
+	duration := time.Since(startTime)
+	if runcResult.OOMKill {
+		return NewErrorResult("OOM killed: agent exceeded memory limit", runcResult.Stderr, runcResult.ExitCode, duration)
+	}
+	return ProcessResult(runcResult.Stdout, runcResult.Stderr, runcResult.Err, duration)
+}
+
+// runWithRuncAndMonitor executes an agent in a runc container with activity monitoring.
+func runWithRuncAndMonitor(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOptions, monitor *ActivityMonitor, startTime time.Time) *Result {
+	// Generate UUID-based container ID (prevents collisions)
+	containerID := fmt.Sprintf("agent-%s", uuid.New().String())
+
+	// Generate OCI bundle
+	bundleGen := oci.NewBundleGenerator()
+	bundle, err := bundleGen.GenerateBundle(cfg, opts.RootFSPath, containerID)
+	if err != nil {
+		return NewErrorResult(fmt.Sprintf("bundle generation: %v", err), "", 1, time.Since(startTime))
+	}
+	defer bundle.Cleanup()
+
+	// Get input
+	input := "{}"
+	if opts != nil && opts.Input != "" {
+		input = opts.Input
+	}
+
+	// Run with runc and activity monitor
+	runc := runtime.NewRunc()
+	runcResult, err := runc.Run(ctx, bundle, input, monitor)
+	if err != nil {
+		return NewErrorResult(err.Error(), "", 1, time.Since(startTime))
+	}
+
+	// Convert runc result to proxy result
+	duration := time.Since(startTime)
+	if runcResult.OOMKill {
+		return NewErrorResult("OOM killed: agent exceeded memory limit", runcResult.Stderr, runcResult.ExitCode, duration)
+	}
+	return ProcessResult(runcResult.Stdout, runcResult.Stderr, runcResult.Err, duration)
+}
+
+// runDirectExec executes an agent directly without isolation.
+// Used for macOS dev mode or Linux without runc.
+func runDirectExec(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions, startTime time.Time) *Result {
+	input := "{}"
+	if opts != nil && opts.Input != "" {
+		input = opts.Input
+	}
+
+	directResult := runtime.RunDirect(ctx, cfg, entrypointPath, input, nil)
+	duration := time.Since(startTime)
+	return ProcessResult(directResult.Stdout, directResult.Stderr, directResult.Err, duration)
+}
+
+// runDirectExecWithMonitor executes an agent directly with activity monitoring.
+func runDirectExecWithMonitor(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions, monitor *ActivityMonitor, startTime time.Time) *Result {
+	input := "{}"
+	if opts != nil && opts.Input != "" {
+		input = opts.Input
+	}
+
+	directResult := runtime.RunDirect(ctx, cfg, entrypointPath, input, monitor)
+	duration := time.Since(startTime)
+	return ProcessResult(directResult.Stdout, directResult.Stderr, directResult.Err, duration)
 }
 
 // ProcessResult handles the output from agent execution.

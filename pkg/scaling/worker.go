@@ -157,7 +157,7 @@ func (w *AgentWorker) Shutdown(ctx context.Context) error {
 type AgentSpawner struct {
 	cfg       *config.AgentConfig
 	agentID   string
-	imagePath string      // Path to agent image
+	imagePath string       // Path to agent image
 	counter   atomic.Int64 // For unique worker IDs
 }
 
