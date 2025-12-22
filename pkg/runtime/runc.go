@@ -1,0 +1,153 @@
+// Package runtime provides container runtime implementations for agent execution.
+package runtime
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
+	"agentscale/pkg/oci"
+	"agentscale/pkg/proxy"
+)
+
+// RuncRuntime wraps the runc binary for OCI container execution
+type RuncRuntime struct {
+	// BinaryPath is the path to the runc binary
+	BinaryPath string
+}
+
+// NewRunc creates a new runc runtime, searching for the binary in standard locations
+func NewRunc() *RuncRuntime {
+	paths := []string{"/usr/bin/runc", "/usr/local/bin/runc", "runc"}
+	for _, p := range paths {
+		if _, err := exec.LookPath(p); err == nil {
+			return &RuncRuntime{BinaryPath: p}
+		}
+	}
+	// Fallback to "runc" - will fail if not in PATH
+	return &RuncRuntime{BinaryPath: "runc"}
+}
+
+// NewRuncWithPath creates a runc runtime with a specific binary path
+func NewRuncWithPath(path string) *RuncRuntime {
+	return &RuncRuntime{BinaryPath: path}
+}
+
+// Available returns true if runc binary is available
+func (r *RuncRuntime) Available() bool {
+	_, err := exec.LookPath(r.BinaryPath)
+	return err == nil
+}
+
+// Run executes an agent in a runc container.
+//
+// Parameters:
+//   - ctx: Context for cancellation/timeout
+//   - bundle: OCI bundle (from pkg/oci)
+//   - input: JSON input to pass via stdin
+//   - monitor: Activity monitor for idle timeout (can be nil)
+//
+// Returns:
+//   - *proxy.Result: Execution result with output/error
+//   - error: If container creation/execution fails
+func (r *RuncRuntime) Run(ctx context.Context, bundle *oci.Bundle, input string, monitor *proxy.ActivityMonitor) (*proxy.Result, error) {
+	startTime := time.Now()
+
+	// Build runc command: runc run --bundle <path> <containerID>
+	cmd := exec.CommandContext(ctx, r.BinaryPath, "run", "--bundle", bundle.Path, bundle.ID)
+	cmd.Stdin = strings.NewReader(input)
+
+	// Set up pipes for stdout/stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create stderr pipe: %w", err)
+	}
+
+	// Start the container
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start runc: %w", err)
+	}
+
+	// Capture output with optional activity monitoring
+	var stdout, stderr bytes.Buffer
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		if monitor != nil {
+			io.Copy(&stdout, monitor.MonitorReader(stdoutPipe, nil))
+		} else {
+			io.Copy(&stdout, stdoutPipe)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if monitor != nil {
+			io.Copy(&stderr, monitor.MonitorReader(stderrPipe, nil))
+		} else {
+			io.Copy(&stderr, stderrPipe)
+		}
+	}()
+
+	// Wait for output capture to complete
+	wg.Wait()
+	runErr := cmd.Wait()
+	duration := time.Since(startTime)
+
+	// Always cleanup container (best effort, ignore errors)
+	r.Delete(bundle.ID)
+
+	// Handle execution error
+	if runErr != nil {
+		exitCode := 1
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+
+		// Check for OOM kill (exit code 137 = 128 + 9 SIGKILL)
+		errMsg := runErr.Error()
+		if exitCode == 137 {
+			errMsg = "OOM killed: agent exceeded memory limit"
+		}
+
+		return proxy.NewErrorResult(errMsg, stderr.String(), exitCode, duration), nil
+	}
+
+	// Process successful result
+	return proxy.ProcessResult(stdout.String(), stderr.String(), nil, duration), nil
+}
+
+// Delete force-deletes a container by ID
+func (r *RuncRuntime) Delete(containerID string) error {
+	cmd := exec.Command(r.BinaryPath, "delete", "--force", containerID)
+	return cmd.Run()
+}
+
+// List returns all container IDs managed by runc
+func (r *RuncRuntime) List() ([]string, error) {
+	cmd := exec.Command(r.BinaryPath, "list", "--quiet")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []string
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			ids = append(ids, line)
+		}
+	}
+	return ids, nil
+}

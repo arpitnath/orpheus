@@ -174,7 +174,7 @@ func runAgentSimple(ctx context.Context, cfg *config.AgentConfig, entrypointPath
 		return NewTimeoutResult(duration)
 	}
 
-	return processResult(stdout.String(), stderr.String(), err, duration)
+	return ProcessResult(stdout.String(), stderr.String(), err, duration)
 }
 
 // runAgentWithActivityMonitor executes with activity-based timeout (Agent-Native)
@@ -242,7 +242,7 @@ func runAgentWithActivityMonitor(ctx context.Context, cfg *config.AgentConfig, e
 		// Normal completion
 		monitor.Stop()
 		duration := time.Since(startTime)
-		return processResult(stdout.String(), stderr.String(), err, duration)
+		return ProcessResult(stdout.String(), stderr.String(), err, duration)
 
 	case reason := <-timeoutChan:
 		// Activity-based timeout triggered
@@ -263,8 +263,9 @@ func runAgentWithActivityMonitor(ctx context.Context, cfg *config.AgentConfig, e
 	}
 }
 
-// processResult handles the output from agent execution
-func processResult(stdoutStr, stderrStr string, err error, duration time.Duration) *Result {
+// ProcessResult handles the output from agent execution.
+// Exported for use by runtime package.
+func ProcessResult(stdoutStr, stderrStr string, err error, duration time.Duration) *Result {
 	stdoutStr = strings.TrimSpace(stdoutStr)
 	stderrStr = strings.TrimSpace(stderrStr)
 
