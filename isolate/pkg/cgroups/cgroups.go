@@ -12,11 +12,16 @@ const (
 	cgroupBasePath = "/sys/fs/cgroup"
 )
 
-// Config holds cgroup resource limits
+// Config holds cgroup resource limits (Agent-Native: Graceful Degradation)
 type Config struct {
-	MemoryLimitMB int // Memory limit in MB (0 = no limit)
-	CPUPercent    int // CPU limit as percentage (100 = 1 core, 200 = 2 cores)
-	MaxPIDs       int // Maximum number of processes (0 = no limit)
+	// Memory configuration (Agent-Native)
+	MemoryTargetMB int  // Soft limit in MB - fast tier (memory.high)
+	MemoryLimitMB  int  // Hard limit in MB - with swap (memory.max)
+	SwapEnabled    bool // Enable swap for graceful degradation
+
+	// Other limits
+	CPUPercent int // CPU limit as percentage (100 = 1 core, 200 = 2 cores)
+	MaxPIDs    int // Maximum number of processes (0 = no limit)
 }
 
 // CGroup represents a cgroup for a container
@@ -48,10 +53,15 @@ func (c *CGroup) Apply(config *Config) error {
 		fmt.Printf("[cgroups] Warning: failed to enable controllers: %v\n", err)
 	}
 
-	// Apply memory limit
+	// Apply memory limits (Agent-Native: Graceful Degradation)
 	if config.MemoryLimitMB > 0 {
-		if err := c.setMemoryLimit(config.MemoryLimitMB); err != nil {
-			return fmt.Errorf("failed to set memory limit: %w", err)
+		targetMB := config.MemoryTargetMB
+		if targetMB == 0 {
+			// Default target to limit if not specified (backward compatibility)
+			targetMB = config.MemoryLimitMB
+		}
+		if err := c.setMemoryLimits(targetMB, config.MemoryLimitMB, config.SwapEnabled); err != nil {
+			return fmt.Errorf("failed to set memory limits: %w", err)
 		}
 	}
 
@@ -118,23 +128,41 @@ func (c *CGroup) enableControllers() error {
 	return nil
 }
 
-// setMemoryLimit sets the memory limit in bytes
-func (c *CGroup) setMemoryLimit(limitMB int) error {
+// setMemoryLimits sets memory limits for Agent-Native graceful degradation
+// targetMB: Soft limit (memory.high) - fast performance tier
+// limitMB: Hard limit (memory.max) - maximum with swap
+// swapEnabled: Allow swap for graceful degradation between target and limit
+func (c *CGroup) setMemoryLimits(targetMB, limitMB int, swapEnabled bool) error {
+	// Convert to bytes
+	targetBytes := int64(targetMB) * 1024 * 1024
 	limitBytes := int64(limitMB) * 1024 * 1024
 
-	// memory.max - hard limit
+	// memory.max - hard limit (OOM kill if exceeded)
 	maxFile := filepath.Join(c.path, "memory.max")
 	if err := os.WriteFile(maxFile, []byte(strconv.FormatInt(limitBytes, 10)), 0644); err != nil {
-		return err
+		return fmt.Errorf("failed to set memory.max: %w", err)
 	}
 
-	// memory.high - soft limit (trigger throttling before OOM)
-	// Set to 90% of max
-	highBytes := limitBytes * 90 / 100
+	// memory.high - soft limit (trigger throttling/reclaim, performance degrades)
+	// This is the "target" tier - agent runs fast below this
 	highFile := filepath.Join(c.path, "memory.high")
-	if err := os.WriteFile(highFile, []byte(strconv.FormatInt(highBytes, 10)), 0644); err != nil {
-		// Non-fatal
-		fmt.Printf("[cgroups] Warning: failed to set memory.high: %v\n", err)
+	if err := os.WriteFile(highFile, []byte(strconv.FormatInt(targetBytes, 10)), 0644); err != nil {
+		// Non-fatal - continue with hard limit only
+		fmt.Printf("[cgroups] Warning: failed to set memory.high (soft limit): %v\n", err)
+	}
+
+	// memory.swap.max - swap limit for graceful degradation
+	// Allow swap equal to the difference between limit and target
+	if swapEnabled && limitMB > targetMB {
+		swapBytes := int64(limitMB-targetMB) * 1024 * 1024
+		swapFile := filepath.Join(c.path, "memory.swap.max")
+		if err := os.WriteFile(swapFile, []byte(strconv.FormatInt(swapBytes, 10)), 0644); err != nil {
+			// Swap may not be available on all systems - non-fatal
+			fmt.Printf("[cgroups] Warning: swap not available (graceful degradation limited): %v\n", err)
+		} else {
+			fmt.Printf("[cgroups] Agent-Native memory: target=%dMB (fast), limit=%dMB (with %dMB swap)\n",
+				targetMB, limitMB, limitMB-targetMB)
+		}
 	}
 
 	return nil

@@ -20,16 +20,21 @@ func createNamespacedProcess(config *Config) error {
 	// Generate container ID
 	containerID := fmt.Sprintf("isolate-%d", os.Getpid())
 
-	// Setup cgroup before spawning child
+	// Setup cgroup before spawning child (Agent-Native: Graceful Degradation)
 	if cgroups.IsCgroupV2() {
 		cg, err := cgroups.New(containerID)
 		if err != nil {
 			fmt.Printf("[isolate] Warning: failed to create cgroup: %v\n", err)
 		} else {
 			cgConfig := &cgroups.Config{
-				MemoryLimitMB: config.MemoryMB,
-				CPUPercent:    config.CPUPercent,
-				MaxPIDs:       config.MaxPIDs,
+				// Agent-Native memory config
+				MemoryTargetMB: config.MemoryMB,      // Soft limit (fast tier)
+				MemoryLimitMB:  config.MemoryLimitMB, // Hard limit (with swap)
+				SwapEnabled:    config.SwapEnabled,   // Enable swap for graceful degradation
+
+				// Other limits
+				CPUPercent: config.CPUPercent,
+				MaxPIDs:    config.MaxPIDs,
 			}
 			if err := cg.Apply(cgConfig); err != nil {
 				fmt.Printf("[isolate] Warning: failed to apply cgroup limits: %v\n", err)

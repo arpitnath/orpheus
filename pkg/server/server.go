@@ -242,6 +242,17 @@ func (s *Server) workerLoop(instance *AgentInstance) {
 		result, err := worker.Execute(req.Context, req.Input)
 		duration := time.Since(start)
 
+		// Log execution result for debugging
+		if err != nil {
+			log.Printf("[worker] Agent '%s' execution error: %v", instance.agentID, err)
+		} else if result.Status != "success" {
+			log.Printf("[worker] Agent '%s' returned status=%s, error=%s, stderr=%s",
+				instance.agentID, result.Status, result.Error, result.Stderr)
+		} else {
+			log.Printf("[worker] Agent '%s' completed successfully (duration=%v)",
+				instance.agentID, duration)
+		}
+
 		// Return worker to pool
 		instance.pool.ReturnWorker(worker)
 

@@ -132,7 +132,7 @@ calculator_agent = Agent(
 
 # AgentScale Handler
 
-def handler(input_data: dict) -> dict:
+async def handler(input_data: dict) -> dict:
     """
     AgentScale entry point for calculator agent.
 
@@ -152,8 +152,8 @@ def handler(input_data: dict) -> dict:
         }
 
     try:
-        # Execute agent with query
-        result = Runner.run_sync(calculator_agent, query)
+        # Execute agent with query (async)
+        result = await Runner.run(calculator_agent, query)
 
         return {
             "response": result.final_output,

@@ -3,4 +3,5 @@ runtime: python3
 module: calculator
 entrypoint: handler
 memory: 256
-timeout: 60
+timeout: 180  # 3 minutes max timeout
+# idle_timeout disabled for VM (VM doesn't stream output)

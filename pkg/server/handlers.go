@@ -121,12 +121,27 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Success response
-		writeJSON(w, http.StatusOK, InvokeResponse{
+		// Success response (but check if agent returned error)
+		response := InvokeResponse{
 			Status:     resp.Result.Status,
 			Output:     resp.Result.Output,
 			DurationMs: resp.Duration.Milliseconds(),
-		})
+		}
+
+		// Include error details if agent returned error status
+		if resp.Result.Error != "" {
+			response.Error = resp.Result.Error
+		}
+
+		// Include stderr if present (helpful for debugging)
+		if resp.Result.Stderr != "" {
+			if response.Output == nil {
+				response.Output = make(map[string]any)
+			}
+			response.Output["stderr"] = resp.Result.Stderr
+		}
+
+		writeJSON(w, http.StatusOK, response)
 
 	case <-r.Context().Done():
 		// Client disconnected or request timeout

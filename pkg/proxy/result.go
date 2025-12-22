@@ -7,9 +7,10 @@ import "time"
 type Status string
 
 const (
-	StatusSuccess Status = "success"
-	StatusError   Status = "error"
-	StatusTimeout Status = "timeout"
+	StatusSuccess     Status = "success"
+	StatusError       Status = "error"
+	StatusTimeout     Status = "timeout"      // Max timeout exceeded
+	StatusIdleTimeout Status = "idle_timeout" // No activity timeout (Agent-Native)
 )
 
 // Result represents the output of an agent execution
@@ -57,11 +58,31 @@ func NewErrorResult(err string, stderr string, exitCode int, duration time.Durat
 	}
 }
 
-// NewTimeoutResult creates a timeout result
+// NewTimeoutResult creates a timeout result (max timeout exceeded)
 func NewTimeoutResult(duration time.Duration) *Result {
 	return &Result{
 		Status:   StatusTimeout,
-		Error:    "execution timed out",
+		Error:    "execution timed out (max timeout exceeded)",
+		ExitCode: -1,
+		Duration: duration,
+	}
+}
+
+// NewIdleTimeoutResult creates an idle timeout result (Agent-Native: no activity)
+func NewIdleTimeoutResult(totalDuration, idleDuration time.Duration) *Result {
+	return &Result{
+		Status:   StatusIdleTimeout,
+		Error:    "agent idle for " + idleDuration.String() + " (no activity detected)",
+		ExitCode: -1,
+		Duration: totalDuration,
+	}
+}
+
+// NewMaxTimeoutResult creates a max timeout result with explicit message
+func NewMaxTimeoutResult(duration time.Duration) *Result {
+	return &Result{
+		Status:   StatusTimeout,
+		Error:    "execution exceeded maximum timeout (" + duration.String() + ")",
 		ExitCode: -1,
 		Duration: duration,
 	}

@@ -47,8 +47,9 @@ func runInVM(config *Config) error {
 			memMB = 256 // Minimum for VM
 		}
 		vmConfig := &vm.Config{
-			CPUs:     2,
-			MemoryMB: memMB,
+			CPUs:      2,
+			MemoryMB:  memMB,
+			SharedDir: config.RootFS, // Mount rootfs via VirtioFS
 		}
 
 		vmInstance, err = vmManager.Create(vmConfig)
@@ -84,6 +85,7 @@ func runInVM(config *Config) error {
 	}
 
 	// Execute command in VM
+	// Python is now in initrd at /usr/local/bin/python3 (no PATH prefix needed)
 	fmt.Printf("[isolate] Executing in VM: %s\n", config.Command)
 
 	// Use the VM interface - need to cast to access RunWithStdin

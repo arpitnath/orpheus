@@ -94,13 +94,23 @@ func (r *Runner) Run(ctx context.Context, opts *RunOptions) (*proxy.Result, erro
 		}
 	}
 
-	// Execute agent
+	// Execute agent with Agent-Native configuration
 	execOpts := &proxy.ExecuteOptions{
 		Input:       input,
 		Env:         opts.Env,
 		UseIsolate:  useIsolate,
 		IsolatePath: isolatePath,
 		RootFSPath:  opts.ImagePath,
+
+		// Agent-Native: Graceful Memory Degradation
+		MemoryTarget: r.cfg.Memory,
+		MemoryLimit:  r.cfg.MemoryLimit,
+		SwapEnabled:  r.cfg.SwapEnabled != nil && *r.cfg.SwapEnabled,
+
+		// Agent-Native: Activity-Based Timeout
+		IdleTimeout:   r.cfg.IdleTimeout,
+		MaxTimeout:    r.cfg.Timeout,
+		ActivityCheck: r.cfg.ActivityCheck,
 	}
 
 	result := r.proxy.Execute(ctx, entrypointPath, execOpts)

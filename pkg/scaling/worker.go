@@ -95,6 +95,7 @@ func (w *AgentWorker) Execute(ctx context.Context, input []byte) (*Result, error
 	proxyResult, err := w.rnr.Run(ctx, &runner.RunOptions{
 		Input:     string(input), // []byte → string conversion
 		ImagePath: w.imagePath,   // Pass image path for --rootfs
+		// NoIsolate controlled by runner (finds isolate binary)
 	})
 
 	if err != nil {

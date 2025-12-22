@@ -7,10 +7,16 @@ import (
 	"strings"
 )
 
-// Config holds the container configuration
+// Config holds the container configuration (Agent-Native)
 type Config struct {
-	Command    string
-	MemoryMB   int    // Memory limit in MB
+	Command string
+
+	// Memory configuration (Agent-Native: Graceful Degradation)
+	MemoryMB      int  // Target memory in MB (soft limit - fast tier)
+	MemoryLimitMB int  // Hard limit in MB (with swap)
+	SwapEnabled   bool // Enable swap for graceful degradation
+
+	// Other limits
 	CPUPercent int    // CPU limit as percentage (50 = 50%)
 	MaxPIDs    int    // Max number of processes
 	RootFS     string // Path to root filesystem (optional)
@@ -40,7 +46,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`isolate - Lightweight container runtime
+	fmt.Println(`isolate - Lightweight container runtime (Agent-Native)
 
 Usage:
   isolate run [options] <command>    Run a command in isolation
@@ -48,10 +54,18 @@ Usage:
   isolate help                       Show this help
 
 Run Options:
-  --memory=<MB>     Memory limit in MB (default: 512)
-  --cpu=<percent>   CPU limit as percentage (default: 100)
-  --pids=<max>      Max processes (default: 100)
-  --rootfs=<path>   Path to root filesystem (enables pivot_root isolation)
+  --memory=<MB>        Memory target in MB - fast tier (default: 256)
+  --memory-limit=<MB>  Memory hard limit in MB - with swap (default: 512)
+  --swap-enabled       Enable swap for graceful degradation (default: true)
+  --no-swap            Disable swap (hard OOM kill at memory target)
+  --cpu=<percent>      CPU limit as percentage (default: 100)
+  --pids=<max>         Max processes (default: 100)
+  --rootfs=<path>      Path to root filesystem (enables pivot_root isolation)
+
+Agent-Native Memory Behavior:
+  0 to target (256MB):     Fast performance (pure RAM)
+  target to limit (512MB): Slower (swapping to disk, but survives)
+  above limit:             OOM kill (hard limit exceeded)
 
 VM Subcommands (macOS only):
   isolate vm status                  Check VM status
@@ -61,13 +75,19 @@ VM Subcommands (macOS only):
 
 Examples:
   isolate run "echo hello"
-  isolate run --memory=256 --cpu=50 "python script.py"
-  isolate run --rootfs=/path/to/rootfs "ls -la /"`)
+  isolate run --memory=256 --memory-limit=512 "python script.py"
+  isolate run --rootfs=/path/to/rootfs "ls -la /"
+  isolate run --memory=128 --no-swap "lightweight_agent.py"`)
 }
 
 func parseArgs(args []string) (*Config, error) {
 	config := &Config{
-		MemoryMB:   512, // Default 512MB
+		// Agent-Native memory defaults
+		MemoryMB:      256,  // Default 256MB target (soft limit)
+		MemoryLimitMB: 512,  // Default 512MB hard limit
+		SwapEnabled:   true, // Enable swap by default
+
+		// Other defaults
 		CPUPercent: 100, // Default 100% (no limit)
 		MaxPIDs:    100, // Default 100 processes
 	}
@@ -84,6 +104,17 @@ func parseArgs(args []string) (*Config, error) {
 				return nil, fmt.Errorf("invalid memory value: %s", val)
 			}
 			config.MemoryMB = mem
+		} else if strings.HasPrefix(arg, "--memory-limit=") {
+			val := strings.TrimPrefix(arg, "--memory-limit=")
+			mem, err := strconv.Atoi(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid memory-limit value: %s", val)
+			}
+			config.MemoryLimitMB = mem
+		} else if arg == "--swap-enabled" {
+			config.SwapEnabled = true
+		} else if arg == "--no-swap" {
+			config.SwapEnabled = false
 		} else if strings.HasPrefix(arg, "--cpu=") {
 			val := strings.TrimPrefix(arg, "--cpu=")
 			cpu, err := strconv.Atoi(val)
@@ -112,6 +143,11 @@ func parseArgs(args []string) (*Config, error) {
 		return nil, fmt.Errorf("no command specified")
 	}
 
+	// Ensure memory limit >= memory target
+	if config.MemoryLimitMB < config.MemoryMB {
+		config.MemoryLimitMB = config.MemoryMB * 2
+	}
+
 	config.Command = strings.Join(commandParts, " ")
 	return config, nil
 }
@@ -129,9 +165,11 @@ func runContainer() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("[isolate] Starting container...\n")
-	fmt.Printf("[isolate] Config: memory=%dMB, cpu=%d%%, pids=%d\n",
-		config.MemoryMB, config.CPUPercent, config.MaxPIDs)
+	fmt.Printf("[isolate] Starting container (Agent-Native)...\n")
+	fmt.Printf("[isolate] Memory: target=%dMB (fast), limit=%dMB (hard), swap=%v\n",
+		config.MemoryMB, config.MemoryLimitMB, config.SwapEnabled)
+	fmt.Printf("[isolate] Limits: cpu=%d%%, pids=%d\n",
+		config.CPUPercent, config.MaxPIDs)
 	if config.RootFS != "" {
 		fmt.Printf("[isolate] RootFS: %s\n", config.RootFS)
 	}
