@@ -96,8 +96,14 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath strin
 
 	case "darwin":
 		if opts != nil && opts.UseIsolate && opts.RootFSPath != "" && opts.IsolatePath == "" {
-			// TODO: Phase 4 - Add Docker support for macOS
-			log.Println("WARN: macOS - running without isolation (dev mode)")
+			if runtime.DockerAvailable() {
+				log.Println("INFO: macOS - using Docker for isolation")
+				if useActivityTimeout {
+					return runWithDockerAndMonitor(ctx, cfg, opts, monitor, startTime)
+				}
+				return runWithDocker(ctx, cfg, opts, startTime)
+			}
+			log.Println("WARN: macOS - running without isolation (Docker not available)")
 			if useActivityTimeout {
 				return runDirectExecWithMonitor(ctx, cfg, entrypointPath, opts, monitor, startTime)
 			}
@@ -385,6 +391,40 @@ func runWithRuncAndMonitor(ctx context.Context, cfg *config.AgentConfig, opts *E
 		return NewErrorResult("OOM killed: agent exceeded memory limit", runcResult.Stderr, runcResult.ExitCode, duration)
 	}
 	return ProcessResult(runcResult.Stdout, runcResult.Stderr, runcResult.Err, duration)
+}
+
+// runWithDocker executes an agent in a Docker container (macOS isolation).
+func runWithDocker(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOptions, startTime time.Time) *Result {
+	input := "{}"
+	if opts != nil && opts.Input != "" {
+		input = opts.Input
+	}
+
+	docker := runtime.NewDocker()
+	dockerResult, err := docker.Run(ctx, cfg, opts.RootFSPath, input, nil)
+	if err != nil {
+		return NewErrorResult(err.Error(), "", 1, time.Since(startTime))
+	}
+
+	duration := time.Since(startTime)
+	return ProcessResult(dockerResult.Stdout, dockerResult.Stderr, dockerResult.Err, duration)
+}
+
+// runWithDockerAndMonitor executes an agent in a Docker container with activity monitoring.
+func runWithDockerAndMonitor(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOptions, monitor *ActivityMonitor, startTime time.Time) *Result {
+	input := "{}"
+	if opts != nil && opts.Input != "" {
+		input = opts.Input
+	}
+
+	docker := runtime.NewDocker()
+	dockerResult, err := docker.Run(ctx, cfg, opts.RootFSPath, input, monitor)
+	if err != nil {
+		return NewErrorResult(err.Error(), "", 1, time.Since(startTime))
+	}
+
+	duration := time.Since(startTime)
+	return ProcessResult(dockerResult.Stdout, dockerResult.Stderr, dockerResult.Err, duration)
 }
 
 // runDirectExec executes an agent directly without isolation.
