@@ -6,6 +6,13 @@ from agentscale import __version__
 from agentscale.commands.run import run
 from agentscale.commands.client import invoke, stats, health
 from agentscale.commands.deploy import deploy
+from agentscale.commands.shell import shell
+from agentscale.commands.exec import exec_command
+from agentscale.commands.status import status
+from agentscale.commands.logs import logs
+from agentscale.commands.list import list_agents
+from agentscale.commands.ps import ps
+from agentscale.commands.runs import runs
 from agentscale.commands import vm
 from agentscale.commands import daemon
 
@@ -44,6 +51,13 @@ app.command()(deploy)
 app.command()(invoke)
 app.command()(stats)
 app.command()(health)
+app.command()(shell)
+app.command(name="exec")(exec_command)
+app.command()(status)
+app.command()(logs)
+app.command(name="list")(list_agents)
+app.command()(ps)
+app.command()(runs)
 
 # Register VM sub-app (Lima management for macOS)
 app.add_typer(vm.app, name="vm")
