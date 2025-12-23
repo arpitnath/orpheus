@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"agentscale/pkg/config"
 	"agentscale/pkg/generator"
@@ -84,23 +83,15 @@ func (r *Runner) Run(ctx context.Context, opts *RunOptions) (*proxy.Result, erro
 	}
 
 	// Determine isolation settings
-	useIsolate := !opts.NoIsolate
-	isolatePath := ""
-	if useIsolate {
-		isolatePath = findIsolateBinary()
-		if isolatePath == "" {
-			// Fall back to no isolation if binary not found
-			useIsolate = false
-		}
-	}
+	// Isolation requires both UseIsolate flag and a deployed agent image (RootFSPath)
+	useIsolate := !opts.NoIsolate && opts.ImagePath != ""
 
 	// Execute agent with Agent-Native configuration
 	execOpts := &proxy.ExecuteOptions{
-		Input:       input,
-		Env:         opts.Env,
-		UseIsolate:  useIsolate,
-		IsolatePath: isolatePath,
-		RootFSPath:  opts.ImagePath,
+		Input:      input,
+		Env:        opts.Env,
+		UseIsolate: useIsolate,
+		RootFSPath: opts.ImagePath,
 
 		// Agent-Native: Graceful Memory Degradation
 		MemoryTarget: r.cfg.Memory,
@@ -133,42 +124,6 @@ func RunFromDir(ctx context.Context, agentDir string, opts *RunOptions) (*proxy.
 // Config returns the runner's configuration
 func (r *Runner) Config() *config.AgentConfig {
 	return r.cfg
-}
-
-// findIsolateBinary searches for the isolate binary in known locations
-func findIsolateBinary() string {
-	// Search order:
-	// 1. ./isolate/bin/isolate (embedded in agentscale - preferred)
-	// 2. ./isolation/bin/isolate (relative to cwd - development)
-	// 3. ../isolation/bin/isolate (sibling directory - monorepo development)
-	// 4. ~/.agentscale/bin/isolate (user installation)
-	// 5. /usr/local/bin/isolate (system installation)
-
-	candidates := []string{
-		"./isolate/bin/isolate",
-		"./isolation/bin/isolate",
-		"../isolation/bin/isolate",
-	}
-
-	// Add user home directory path
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".agentscale", "bin", "isolate"))
-	}
-
-	// Add system path
-	candidates = append(candidates, "/usr/local/bin/isolate")
-
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			// Convert to absolute path
-			if abs, err := filepath.Abs(path); err == nil {
-				return abs
-			}
-			return path
-		}
-	}
-
-	return ""
 }
 
 // OutputJSON formats a result as JSON string

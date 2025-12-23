@@ -2,16 +2,13 @@
 package proxy
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"os/exec"
 	goruntime "runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,10 +32,7 @@ type ExecuteOptions struct {
 	// UseIsolate enables container isolation
 	UseIsolate bool
 
-	// IsolatePath is the path to the isolate binary
-	IsolatePath string
-
-	// RootFSPath is the path to agent image for --rootfs flag
+	// RootFSPath is the path to deployed agent image directory
 	RootFSPath string
 
 	// Memory configuration (Agent-Native: Graceful Degradation)
@@ -54,9 +48,8 @@ type ExecuteOptions struct {
 
 // RunAgent executes the agent with the given configuration and entry point.
 // Uses platform-based runtime selection:
-//   - Linux + UseIsolate + RootFSPath: Use runc container (new path)
-//   - Linux + UseIsolate + IsolatePath: Use legacy isolate binary
-//   - macOS + UseIsolate: Use Docker (Phase 4) or warn and run direct
+//   - Linux + UseIsolate + RootFSPath: Use runc container
+//   - macOS + UseIsolate + RootFSPath: Use Docker container
 //   - Default: Run directly without isolation
 func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions) *Result {
 	startTime := time.Now()
@@ -69,17 +62,13 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath strin
 		defer monitor.Stop()
 	}
 
-	// Check if we should use new runc path (Linux + UseIsolate + RootFSPath + no legacy IsolatePath)
-	useNewRuncPath := opts != nil &&
-		opts.UseIsolate &&
-		opts.RootFSPath != "" &&
-		opts.IsolatePath == "" &&
-		goruntime.GOOS == "linux"
+	// Check if isolation is requested with a deployed agent image
+	useIsolation := opts != nil && opts.UseIsolate && opts.RootFSPath != ""
 
 	// Platform-based runtime selection
 	switch goruntime.GOOS {
 	case "linux":
-		if useNewRuncPath {
+		if useIsolation {
 			if runtime.RuncAvailable() {
 				if useActivityTimeout {
 					return runWithRuncAndMonitor(ctx, cfg, opts, monitor, startTime)
@@ -87,15 +76,10 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath strin
 				return runWithRunc(ctx, cfg, opts, startTime)
 			}
 			log.Println("WARN: runc not found, running without isolation")
-			if useActivityTimeout {
-				return runDirectExecWithMonitor(ctx, cfg, entrypointPath, opts, monitor, startTime)
-			}
-			return runDirectExec(ctx, cfg, entrypointPath, opts, startTime)
 		}
-		// Fall through to legacy path (uses buildCommand with IsolatePath)
 
 	case "darwin":
-		if opts != nil && opts.UseIsolate && opts.RootFSPath != "" && opts.IsolatePath == "" {
+		if useIsolation {
 			if runtime.DockerAvailable() {
 				log.Println("INFO: macOS - using Docker for isolation")
 				if useActivityTimeout {
@@ -104,224 +88,14 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath strin
 				return runWithDocker(ctx, cfg, opts, startTime)
 			}
 			log.Println("WARN: macOS - running without isolation (Docker not available)")
-			if useActivityTimeout {
-				return runDirectExecWithMonitor(ctx, cfg, entrypointPath, opts, monitor, startTime)
-			}
-			return runDirectExec(ctx, cfg, entrypointPath, opts, startTime)
 		}
-		// Fall through to legacy path
 	}
 
-	// Legacy path: Use existing buildCommand approach (for backward compatibility)
+	// Default: direct execution
 	if useActivityTimeout {
-		return runAgentWithActivityMonitor(ctx, cfg, entrypointPath, opts)
+		return runDirectExecWithMonitor(ctx, cfg, entrypointPath, opts, monitor, startTime)
 	}
-	return runAgentSimple(ctx, cfg, entrypointPath, opts)
-}
-
-// buildCommand creates the exec.Cmd for agent execution
-func buildCommand(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions) *exec.Cmd {
-	var cmd *exec.Cmd
-	useIsolation := opts != nil && opts.UseIsolate && opts.IsolatePath != ""
-	hasRootFS := opts != nil && opts.RootFSPath != ""
-
-	if useIsolation {
-		// Build isolate command with Agent-Native memory flags
-		memoryTarget := cfg.Memory
-		memoryLimit := cfg.MemoryLimit
-		swapEnabled := true // Default to enabled
-
-		// Override with opts if provided
-		if opts.MemoryTarget > 0 {
-			memoryTarget = opts.MemoryTarget
-		}
-		if opts.MemoryLimit > 0 {
-			memoryLimit = opts.MemoryLimit
-		}
-		if opts.MemoryLimit > 0 || opts.MemoryTarget > 0 {
-			// If either is explicitly set, use SwapEnabled from opts
-			swapEnabled = opts.SwapEnabled
-		}
-
-		// Ensure limit >= target
-		if memoryLimit < memoryTarget {
-			memoryLimit = memoryTarget * 2
-		}
-
-		args := []string{
-			"run",
-			fmt.Sprintf("--memory=%d", memoryTarget),
-			fmt.Sprintf("--memory-limit=%d", memoryLimit),
-		}
-		if swapEnabled {
-			args = append(args, "--swap-enabled")
-		} else {
-			args = append(args, "--no-swap")
-		}
-
-		if hasRootFS {
-			// Add --rootfs flag for true filesystem isolation
-			args = append(args, fmt.Sprintf("--rootfs=%s", opts.RootFSPath))
-			// Entrypoint path inside container/VM
-			// On macOS: VirtioFS mounts rootfs at /workspace
-			entrypointPath = "/workspace/agent/_entrypoint.py"
-		}
-
-		// Use absolute Python path when using rootfs (deployed image)
-		pythonCmd := "python3"
-		if hasRootFS {
-			// Python is at /usr/local/bin/python3 in VM initrd
-			pythonCmd = "/usr/local/bin/python3"
-		}
-
-		args = append(args, fmt.Sprintf("%s %s", pythonCmd, entrypointPath))
-		cmd = exec.CommandContext(ctx, opts.IsolatePath, args...)
-
-		// Set PYTHONPATH and PATH for packages and agent code
-		if hasRootFS {
-			cmd.Env = append(cmd.Environ(),
-				"PATH=/usr/local/bin:/usr/bin:/bin",
-				"PYTHONPATH=/workspace/packages:/workspace/agent",
-				"PYTHONUNBUFFERED=1",
-				"PYTHONDONTWRITEBYTECODE=1")
-		}
-	} else {
-		// Run directly (no isolation)
-		cmd = exec.CommandContext(ctx, "python3", entrypointPath)
-	}
-
-	// Determine working directory
-	workDir := cfg.AgentDir
-	if opts != nil && opts.WorkDir != "" {
-		workDir = opts.WorkDir
-	}
-	cmd.Dir = workDir
-
-	// Set environment variables
-	if cfg.Env != nil {
-		cmd.Env = append(cmd.Environ(), cfg.Env...)
-	}
-	if opts != nil && opts.Env != nil {
-		cmd.Env = append(cmd.Environ(), opts.Env...)
-	}
-
-	return cmd
-}
-
-// runAgentSimple executes without activity monitoring (original behavior)
-func runAgentSimple(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions) *Result {
-	startTime := time.Now()
-
-	cmd := buildCommand(ctx, cfg, entrypointPath, opts)
-
-	// Set up stdin
-	if opts != nil && opts.Input != "" {
-		cmd.Stdin = strings.NewReader(opts.Input)
-	} else {
-		cmd.Stdin = strings.NewReader("{}")
-	}
-
-	// Capture stdout and stderr
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// Run the command
-	err := cmd.Run()
-	duration := time.Since(startTime)
-
-	// Check for context cancellation (timeout)
-	if ctx.Err() == context.DeadlineExceeded {
-		return NewTimeoutResult(duration)
-	}
-
-	return ProcessResult(stdout.String(), stderr.String(), err, duration)
-}
-
-// runAgentWithActivityMonitor executes with activity-based timeout (Agent-Native)
-func runAgentWithActivityMonitor(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions) *Result {
-	startTime := time.Now()
-
-	// Create activity monitor
-	monitor := NewActivityMonitor(opts.IdleTimeout, opts.MaxTimeout, opts.ActivityCheck)
-	defer monitor.Stop()
-
-	cmd := buildCommand(ctx, cfg, entrypointPath, opts)
-
-	// Set up stdin
-	if opts != nil && opts.Input != "" {
-		cmd.Stdin = strings.NewReader(opts.Input)
-	} else {
-		cmd.Stdin = strings.NewReader("{}")
-	}
-
-	// Get pipes for stdout/stderr to enable activity monitoring
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return NewErrorResult(fmt.Sprintf("failed to create stdout pipe: %v", err), "", 1, time.Since(startTime))
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return NewErrorResult(fmt.Sprintf("failed to create stderr pipe: %v", err), "", 1, time.Since(startTime))
-	}
-
-	// Start the command
-	if err := cmd.Start(); err != nil {
-		return NewErrorResult(fmt.Sprintf("failed to start command: %v", err), "", 1, time.Since(startTime))
-	}
-
-	// Capture output with activity monitoring
-	var stdout, stderr bytes.Buffer
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Monitor stdout
-	go func() {
-		defer wg.Done()
-		io.Copy(&stdout, monitor.MonitorReader(stdoutPipe, nil))
-	}()
-
-	// Monitor stderr
-	go func() {
-		defer wg.Done()
-		io.Copy(&stderr, monitor.MonitorReader(stderrPipe, nil))
-	}()
-
-	// Start activity watching
-	timeoutChan := monitor.StartWatching()
-
-	// Wait for completion in a goroutine
-	doneChan := make(chan error, 1)
-	go func() {
-		wg.Wait()
-		doneChan <- cmd.Wait()
-	}()
-
-	// Wait for completion, activity timeout, or context cancellation
-	select {
-	case err := <-doneChan:
-		// Normal completion
-		monitor.Stop()
-		duration := time.Since(startTime)
-		return ProcessResult(stdout.String(), stderr.String(), err, duration)
-
-	case reason := <-timeoutChan:
-		// Activity-based timeout triggered
-		cmd.Process.Kill()
-		wg.Wait() // Wait for goroutines to finish
-		duration := time.Since(startTime)
-
-		if reason == "idle_timeout" {
-			return NewIdleTimeoutResult(duration, monitor.GetIdleTime())
-		}
-		return NewMaxTimeoutResult(duration)
-
-	case <-ctx.Done():
-		// Context cancelled (external timeout from caller)
-		cmd.Process.Kill()
-		wg.Wait() // Wait for goroutines to finish
-		return NewTimeoutResult(time.Since(startTime))
-	}
+	return runDirectExec(ctx, cfg, entrypointPath, opts, startTime)
 }
 
 // runWithRunc executes an agent in a runc container (Linux isolation).
