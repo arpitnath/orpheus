@@ -95,14 +95,14 @@ def read_agent_config(agent_path: str) -> Dict[str, Any]:
 # ============================================================================
 
 def find_base_image(runtime: str, version: str) -> Path:
-    """Find appropriate base image based on runtime.
+    """Find base image directory (works on Linux and macOS+Lima).
 
     Args:
         runtime: Runtime type (python3, node, etc.)
         version: Runtime version (3.10, 3.11, etc.)
 
     Returns:
-        Path to base image
+        Path to base image directory
 
     Raises:
         ImageNotFoundError: If base image not found
@@ -113,44 +113,29 @@ def find_base_image(runtime: str, version: str) -> Path:
             f"Only python3 is supported in v0.1.0"
         )
 
-    # Construct image name
+    # Always use directory-based image (not initrd)
     image_name = f"python-{version}"
     images_dir = Path.home() / ".agentscale" / "images"
+    base_path = images_dir / image_name
 
-    # Platform-specific base image location
-    if sys.platform.startswith("linux"):
-        # Linux: Directory-based rootfs
-        base_path = images_dir / image_name
-
-        if not base_path.exists():
-            raise ImageNotFoundError(
-                f"Base image not found: {base_path}\n\n"
-                f"Please build it first:\n"
-                f"  cd agentscale/isolate/scripts\n"
-                f"  ./build-python-{version}-image.sh\n"
-            )
-
-        return base_path
-
-    elif sys.platform == "darwin":
-        # macOS: Compressed initrd file
-        base_path = images_dir / f"{image_name}.initrd.gz"
-
-        if not base_path.exists():
-            raise ImageNotFoundError(
-                f"Base image not found: {base_path}\n\n"
-                f"Please build it first:\n"
-                f"  cd agentscale/isolate/scripts\n"
-                f"  ./build-python-{version}-initrd.sh\n"
-            )
-
-        return base_path
-
-    else:
+    if not base_path.exists():
         raise ImageNotFoundError(
-            f"Unsupported platform: {sys.platform}\n"
-            f"Only Linux and macOS (darwin) are supported"
+            f"Base image not found: {base_path}\n\n"
+            f"Please build it first:\n"
+            f"  cd agentscale/isolate/scripts\n"
+            f"  ./build-python-{version}-image.sh\n"
         )
+
+    # Verify complete rootfs (must have /lib for dynamic linker)
+    if not (base_path / "lib").exists():
+        raise ImageNotFoundError(
+            f"Incomplete base image (missing /lib): {base_path}\n\n"
+            f"Rebuild with:\n"
+            f"  cd agentscale/isolate/scripts\n"
+            f"  ./build-python-{version}-image.sh\n"
+        )
+
+    return base_path
 
 
 # ============================================================================
@@ -187,7 +172,8 @@ def create_agent_image_dir(agent_name: str, force: bool = False) -> Path:
 
     # Create structure
     agent_dir.mkdir(parents=True, exist_ok=True)
-    (agent_dir / "runtime").mkdir(exist_ok=True)
+    # Note: Don't pre-create runtime/ - base image copy creates the structure
+    # Only create directories for packages and agent code
     (agent_dir / "packages").mkdir(exist_ok=True)
     (agent_dir / "agent").mkdir(exist_ok=True)
 
@@ -263,16 +249,16 @@ def build_agent_image(
 
     size_bytes, size_mb = calculate_size(agent_image_dir)
 
-    # Step 4: Copy runtime from base image
-    print("[deploy] Step 1/4: Copying runtime...")
-    runtime_dir = agent_image_dir / "runtime"
-    copy_runtime(base_image_path, runtime_dir)
-    runtime_size_bytes, runtime_size_mb = calculate_size(runtime_dir)
-    print(f"[deploy] ✓ Runtime copied ({runtime_size_mb}MB)")
+    # Step 4: Copy runtime from base image (creates complete rootfs)
+    print("[deploy] Step 1/5: Copying runtime...")
+    copy_runtime(base_image_path, agent_image_dir)
+    # Calculate size after base image copy
+    base_size_bytes, base_size_mb = calculate_size(agent_image_dir)
+    print(f"[deploy] ✓ Runtime copied ({base_size_mb}MB)")
     print("")
 
     # Step 5: Install dependencies
-    print("[deploy] Step 2/4: Installing dependencies...")
+    print("[deploy] Step 2/5: Installing dependencies...")
     packages_dir = agent_image_dir / "packages"
     install_dependencies(agent_path, packages_dir, no_cache)
     deps_size_bytes, deps_size_mb = calculate_size(packages_dir)
@@ -281,15 +267,27 @@ def build_agent_image(
     print("")
 
     # Step 6: Copy agent code
-    print("[deploy] Step 3/4: Copying agent code...")
+    print("[deploy] Step 3/5: Copying agent code...")
     agent_code_dir = agent_image_dir / "agent"
     copy_agent_code(agent_path, agent_code_dir)
     code_size_bytes, code_size_mb = calculate_size(agent_code_dir)
     print(f"[deploy] ✓ Agent code copied ({code_size_mb}MB)")
     print("")
 
+    # Step 6.5: Generate entrypoint
+    print("[deploy] Step 4/5: Generating entrypoint...")
+    generate_entrypoint(agent_config, agent_code_dir)
+    print(f"[deploy] ✓ Entrypoint generated")
+    print("")
+
+    # Step 6.6: Copy agent.yaml to root (daemon expects it there)
+    agent_yaml_src = agent_code_dir / "agent.yaml"
+    agent_yaml_dst = agent_image_dir / "agent.yaml"
+    if agent_yaml_src.exists():
+        shutil.copy2(agent_yaml_src, agent_yaml_dst)
+
     # Step 7: Create manifest
-    print("[deploy] Step 4/4: Creating manifest...")
+    print("[deploy] Step 5/5: Creating manifest...")
     create_manifest(agent_config, agent_image_dir, base_image_path)
     print(f"[deploy] ✓ Manifest created")
     print("")
@@ -318,77 +316,39 @@ def build_agent_image(
 # Runtime Copy
 # ============================================================================
 
-def copy_runtime(base_image_path: Path, runtime_dir: Path) -> None:
-    """Copy base image to agent runtime directory.
+def copy_runtime(base_image_path: Path, agent_image_dir: Path) -> None:
+    """Copy complete base image to agent directory.
+
+    Creates a complete Linux rootfs by copying the entire base image
+    directory tree. This provides all necessary system libraries,
+    binaries, and the Python runtime.
 
     Args:
-        base_image_path: Path to base image
-        runtime_dir: Target runtime directory
+        base_image_path: Path to base image directory
+        agent_image_dir: Target agent directory (will be populated with rootfs)
 
     Raises:
         BuildError: If copy fails
     """
-    if sys.platform.startswith("linux"):
-        copy_runtime_linux(base_image_path, runtime_dir)
-    elif sys.platform == "darwin":
-        copy_runtime_macos(base_image_path, runtime_dir)
-    else:
-        raise BuildError(f"Unsupported platform: {sys.platform}")
-
-
-def copy_runtime_linux(base_path: Path, runtime_dir: Path) -> None:
-    """Copy Linux base image (directory) to runtime directory.
-
-    Args:
-        base_path: Path to base image directory
-        runtime_dir: Target directory
-    """
     try:
-        # Copy entire directory tree
-        shutil.copytree(
-            base_path,
-            runtime_dir,
-            symlinks=True,  # Preserve symlinks
-            ignore_dangling_symlinks=True,
-            dirs_exist_ok=True
-        )
+        # Copy entire directory tree directly into agent directory
+        # This creates bin/, lib/, usr/, etc/ at the root of agent directory
+        for item in base_image_path.iterdir():
+            src = item
+            dst = agent_image_dir / item.name
+
+            if item.is_dir():
+                shutil.copytree(
+                    src,
+                    dst,
+                    symlinks=True,  # Preserve symlinks
+                    ignore_dangling_symlinks=True,
+                    dirs_exist_ok=True
+                )
+            else:
+                shutil.copy2(src, dst)
     except Exception as e:
-        raise BuildError(f"Failed to copy Linux runtime: {e}")
-
-
-def copy_runtime_macos(base_initrd: Path, runtime_dir: Path) -> None:
-    """Extract macOS base image (initrd) to runtime directory.
-
-    Args:
-        base_initrd: Path to compressed initrd file
-        runtime_dir: Target directory
-    """
-    try:
-        # Extract initrd: gunzip -c base.initrd.gz | cpio -idm -D runtime_dir
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-
-        # Run gunzip and pipe to cpio
-        with subprocess.Popen(
-            ["gunzip", "-c", str(base_initrd)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        ) as gunzip_proc:
-
-            cpio_result = subprocess.run(
-                ["cpio", "-idm"],
-                stdin=gunzip_proc.stdout,
-                cwd=runtime_dir,
-                capture_output=True,
-                text=True
-            )
-
-            if cpio_result.returncode != 0:
-                raise BuildError(f"cpio extraction failed: {cpio_result.stderr}")
-
-    except subprocess.CalledProcessError as e:
-        raise BuildError(f"Failed to extract macOS runtime: {e}")
-    except Exception as e:
-        raise BuildError(f"Failed to copy macOS runtime: {e}")
+        raise BuildError(f"Failed to copy runtime: {e}")
 
 
 # ============================================================================
@@ -397,6 +357,8 @@ def copy_runtime_macos(base_initrd: Path, runtime_dir: Path) -> None:
 
 def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = False) -> None:
     """Install Python dependencies from requirements.txt.
+
+    On macOS, downloads Linux ARM64 packages for Lima VM execution.
 
     Args:
         agent_path: Path to agent directory
@@ -418,15 +380,21 @@ def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = F
         print("[deploy] requirements.txt is empty, skipping dependencies")
         return
 
-    print(f"[deploy] Installing {len(lines)} package(s)...")
+    print(f"[deploy] Installing {len(lines)} package(s) for Linux ARM64...")
 
     # Ensure packages directory exists
     packages_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build pip command
+    # Build pip command with Linux ARM64 target
+    # Note: Ubuntu 24.04 has Python 3.12, so we target that version
     cmd = [
         sys.executable, "-m", "pip", "install",
         "--target", str(packages_dir),
+        "--platform", "manylinux2014_aarch64",  # Linux ARM64 wheels
+        "--only-binary=:all:",  # Fail if no wheel available
+        "--python-version", "3.12",  # Match runtime version (Ubuntu 24.04 default)
+        "--implementation", "cp",  # CPython
+        "--abi", "cp312",  # Python 3.12 ABI
         "-r", str(requirements_file),
         "--quiet"
     ]
@@ -442,13 +410,23 @@ def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = F
             text=True,
             check=True
         )
+
+        # Verify no macOS packages installed
+        darwin_files = list(packages_dir.rglob("*.darwin.so"))
+        if darwin_files:
+            raise BuildError(
+                f"Found macOS packages (expected Linux): {[f.name for f in darwin_files[:3]]}\n"
+                f"Try: pip install --upgrade pip"
+            )
+
     except subprocess.CalledProcessError as e:
         # Extract package name from error if possible
         error_msg = e.stderr
 
         raise BuildError(
             f"Failed to install dependencies:\n\n{error_msg}\n\n"
-            f"Check requirements.txt syntax and package availability on PyPI"
+            f"Check requirements.txt syntax and package availability on PyPI\n"
+            f"(Some packages may not have manylinux2014_aarch64 wheels)"
         )
 
 
@@ -530,10 +508,10 @@ def create_manifest(agent_config: Dict[str, Any], agent_image_dir: Path, base_im
             }
         },
         "paths": {
-            "python_binary": "/runtime/usr/local/bin/python3",
+            "python_binary": "/usr/local/bin/python3.10",
             "packages_dir": "/packages",
             "agent_code": "/agent",
-            "entrypoint": f"/agent/{agent_config['module']}.py"
+            "entrypoint": "/agent/_entrypoint.py"
         },
         "environment": {
             "PYTHONPATH": "/packages:/agent",
@@ -545,4 +523,85 @@ def create_manifest(agent_config: Dict[str, Any], agent_image_dir: Path, base_im
     manifest_file = agent_image_dir / "manifest.json"
     with open(manifest_file, "w") as f:
         json.dump(manifest, f, indent=2)
+
+
+# ============================================================================
+# Entrypoint Generation
+# ============================================================================
+
+def generate_entrypoint(agent_config: Dict[str, Any], agent_code_dir: Path) -> None:
+    """Generate _entrypoint.py for deployed agent.
+
+    Args:
+        agent_config: Agent configuration dict
+        agent_code_dir: Path to agent code directory
+
+    Raises:
+        BuildError: If entrypoint generation fails
+    """
+    from string import Template
+
+    module = agent_config["module"].rstrip(".py")
+    entrypoint = agent_config["entrypoint"]
+    input_type = agent_config.get("input_type", "")
+
+    template_str = '''#!/usr/bin/env python3
+"""Auto-generated entry point - DO NOT EDIT"""
+import sys
+import json
+import asyncio
+import traceback
+import inspect
+
+from ${module} import ${entrypoint}
+${input_type_import}
+
+async def main():
+    try:
+        input_data = sys.stdin.read().strip()
+        data = json.loads(input_data) if input_data else {}
+
+        ${input_handling}
+
+        if inspect.iscoroutinefunction(${entrypoint}):
+            result = await result
+        elif inspect.iscoroutine(result):
+            result = await result
+
+        # Serialize result
+        if hasattr(result, 'model_dump'):
+            output = result.model_dump()
+        elif isinstance(result, dict):
+            output = result
+        else:
+            output = {"result": str(result)}
+
+        print(json.dumps(output))
+    except Exception as e:
+        print(json.dumps({
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "status": "error"
+        }))
+        sys.exit(1)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+'''
+
+    vars = {"module": module, "entrypoint": entrypoint}
+    if input_type:
+        vars["input_type_import"] = f"from {module} import {input_type}"
+        vars["input_handling"] = f"input_obj = {input_type}(**data)\nresult = {entrypoint}(input_obj)"
+    else:
+        vars["input_type_import"] = ""
+        vars["input_handling"] = f"result = {entrypoint}(data)"
+
+    try:
+        entrypoint_code = Template(template_str).substitute(vars)
+        entrypoint_path = agent_code_dir / "_entrypoint.py"
+        entrypoint_path.write_text(entrypoint_code)
+        entrypoint_path.chmod(0o755)
+    except Exception as e:
+        raise BuildError(f"Failed to generate entrypoint: {e}")
 

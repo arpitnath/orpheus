@@ -23,10 +23,13 @@ disk: "20GiB"
 # Use Apple Virtualization.framework (fastest on macOS 13.5+)
 vmType: "vz"
 
-# Enable Rosetta for x86_64 binaries on ARM (optional)
-rosetta:
-  enabled: true
-  binfmt: true
+# VZ-specific options
+vmOpts:
+  vz:
+    # Enable Rosetta for x86_64 binaries on ARM (optional)
+    rosetta:
+      enabled: true
+      binfmt: true
 
 # Firmware (UEFI for VZ)
 firmware:
@@ -54,10 +57,6 @@ mounts:
       cache: true
       followSymlinks: true
 
-  # Temp directory (for agent images)
-  - location: "/tmp/agentscale"
-    writable: true
-
 # SSH Configuration
 ssh:
   localPort: 0  # Random port
@@ -73,11 +72,6 @@ portForwards:
   # Forward metrics port (optional)
   - guestPort: 9090
     hostPort: 9090
-
-# DNS Configuration
-dns:
-  - 8.8.8.8
-  - 8.8.4.4
 
 # Containerd (we use runc directly, but containerd available if needed)
 containerd:

@@ -46,7 +46,7 @@ func GenerateSpec(cfg *config.AgentConfig) *Spec {
 
 	// Build environment variables
 	env := []string{
-		"PATH=/runtime/bin:/usr/bin:/bin",
+		"PATH=/usr/local/bin:/usr/bin:/bin",
 		"PYTHONPATH=/packages:/agent",
 		"PYTHONUNBUFFERED=1",
 		"PYTHONDONTWRITEBYTECODE=1",
@@ -64,7 +64,7 @@ func GenerateSpec(cfg *config.AgentConfig) *Spec {
 				GID: ContainerGID,
 			},
 			Args: []string{
-				"/runtime/bin/python3",
+				"/usr/local/bin/python3.10",
 				"/agent/_entrypoint.py",
 			},
 			Env: env,
@@ -125,6 +125,10 @@ func GenerateSpec(cfg *config.AgentConfig) *Spec {
 // GenerateSpecWithOptions creates an OCI spec with additional customization options.
 // This is useful for testing or when specific overrides are needed.
 type SpecOptions struct {
+	// RootfsPath overrides the default "rootfs" path
+	// Use absolute path when not using symlinks
+	RootfsPath string
+
 	// MemoryLimitMB overrides the memory limit from config
 	MemoryLimitMB int
 
@@ -147,6 +151,11 @@ func GenerateSpecWithOptions(cfg *config.AgentConfig, opts *SpecOptions) *Spec {
 
 	if opts == nil {
 		return spec
+	}
+
+	// Apply rootfs path override (use absolute path for runc)
+	if opts.RootfsPath != "" {
+		spec.Root.Path = opts.RootfsPath
 	}
 
 	// Apply overrides

@@ -32,6 +32,114 @@ def find_lima_template() -> Optional[Path]:
     return None
 
 
+def find_daemon_binary_linux() -> Optional[Path]:
+    """Find the Linux daemon binary for Lima VM."""
+    locations = [
+        # Relative to CLI package (development)
+        Path(__file__).parent.parent.parent.parent / "bin" / "agentscale-daemon-linux",
+        # ~/.agentscale/bin (installed)
+        Path.home() / ".agentscale" / "bin" / "agentscale-daemon-linux",
+    ]
+
+    for loc in locations:
+        if loc.exists():
+            return loc
+
+    return None
+
+
+def copy_daemon_to_vm() -> bool:
+    """Copy Linux daemon binary into VM."""
+    daemon_binary = find_daemon_binary_linux()
+    if not daemon_binary:
+        print_error(
+            "Linux daemon binary not found",
+            "Build with: cd agentscale && GOOS=linux GOARCH=arm64 go build -o bin/agentscale-daemon-linux ./cmd/agentscale-daemon"
+        )
+        return False
+
+    try:
+        # Copy binary to VM
+        print_info(f"Copying daemon binary from {daemon_binary}")
+        subprocess.run([
+            "limactl", "copy",
+            str(daemon_binary),
+            "agentscale:/tmp/agentscale-daemon"
+        ], check=True, capture_output=True)
+
+        # Move to /usr/local/bin with sudo
+        subprocess.run([
+            "limactl", "shell", "agentscale", "--",
+            "sudo", "mv", "/tmp/agentscale-daemon", "/usr/local/bin/agentscale-daemon"
+        ], check=True, capture_output=True)
+
+        # Make executable
+        subprocess.run([
+            "limactl", "shell", "agentscale", "--",
+            "sudo", "chmod", "+x", "/usr/local/bin/agentscale-daemon"
+        ], check=True, capture_output=True)
+
+        return True
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to copy daemon binary: {e}")
+        return False
+
+
+def start_daemon_in_vm() -> bool:
+    """Start daemon inside Lima VM with environment variables."""
+    import time
+
+    # Build environment variable string for API keys
+    env_vars = []
+    if os.environ.get("OPENAI_API_KEY"):
+        env_vars.append(f"OPENAI_API_KEY={os.environ['OPENAI_API_KEY']}")
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        env_vars.append(f"ANTHROPIC_API_KEY={os.environ['ANTHROPIC_API_KEY']}")
+
+    env_prefix = " ".join(env_vars) + " " if env_vars else ""
+
+    try:
+        # Kill any existing daemon first
+        subprocess.run([
+            "limactl", "shell", "agentscale", "--",
+            "sudo", "pkill", "-f", "agentscale-daemon"
+        ], capture_output=True)  # Ignore errors if no process
+
+        # Start daemon with environment variables
+        cmd = f"{env_prefix}nohup /usr/local/bin/agentscale-daemon --socket /var/run/agentscale.sock > /var/log/agentscale-daemon.log 2>&1 &"
+        subprocess.run([
+            "limactl", "shell", "agentscale", "--",
+            "sudo", "bash", "-c", cmd
+        ], check=True, capture_output=True)
+
+        # Wait a moment for socket to be created
+        time.sleep(1)
+
+        # Fix socket permissions so Lima can forward it
+        subprocess.run([
+            "limactl", "shell", "agentscale", "--",
+            "sudo", "chmod", "666", "/var/run/agentscale.sock"
+        ], capture_output=True)
+
+        return True
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to start daemon: {e}")
+        return False
+
+
+def wait_for_daemon_socket(timeout: int = 10) -> bool:
+    """Wait for daemon socket to be available."""
+    import time
+    socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+
+    for i in range(timeout):
+        if socket_path.exists():
+            return True
+        time.sleep(1)
+
+    return False
+
+
 def check_lima_installed() -> bool:
     """Check if Lima is installed."""
     try:
@@ -128,6 +236,30 @@ def start(
         except subprocess.CalledProcessError as e:
             print_error(f"Failed to start VM: {e}")
             raise typer.Exit(1)
+
+    # Provision daemon in VM
+    print_info("Setting up daemon...")
+
+    # Copy daemon binary
+    if not copy_daemon_to_vm():
+        raise typer.Exit(1)
+
+    # Start daemon
+    print_info("Starting daemon...")
+    if not start_daemon_in_vm():
+        raise typer.Exit(1)
+
+    # Wait for socket
+    print_info("Waiting for daemon socket...")
+    if wait_for_daemon_socket(timeout=15):
+        print_success("Daemon is ready!")
+        socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+        print_info(f"Socket: {socket_path}")
+    else:
+        print_error(
+            "Daemon socket not found",
+            "Check logs with: agentscale vm ssh -- sudo cat /var/log/agentscale-daemon.log"
+        )
 
 
 @app.command()

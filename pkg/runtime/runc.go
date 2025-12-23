@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -51,6 +52,16 @@ func (r *RuncRuntime) Available() bool {
 	return err == nil
 }
 
+// isInterfaceNil checks if an interface has a nil underlying value.
+// In Go, an interface with a typed nil pointer is not nil, so we need reflection.
+func isInterfaceNil(i interface{}) bool {
+	if i == nil {
+		return true
+	}
+	v := reflect.ValueOf(i)
+	return v.Kind() == reflect.Ptr && v.IsNil()
+}
+
 // Run executes an agent in a runc container.
 //
 // Parameters:
@@ -87,9 +98,12 @@ func (r *RuncRuntime) Run(ctx context.Context, bundle *oci.Bundle, input string,
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	// Check if monitor is actually usable (not a typed nil interface)
+	hasMonitor := !isInterfaceNil(monitor)
+
 	go func() {
 		defer wg.Done()
-		if monitor != nil {
+		if hasMonitor {
 			io.Copy(&stdout, monitor.MonitorReader(stdoutPipe, nil))
 		} else {
 			io.Copy(&stdout, stdoutPipe)
@@ -98,7 +112,7 @@ func (r *RuncRuntime) Run(ctx context.Context, bundle *oci.Bundle, input string,
 
 	go func() {
 		defer wg.Done()
-		if monitor != nil {
+		if hasMonitor {
 			io.Copy(&stderr, monitor.MonitorReader(stderrPipe, nil))
 		} else {
 			io.Copy(&stderr, stderrPipe)

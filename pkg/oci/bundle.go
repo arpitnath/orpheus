@@ -71,8 +71,15 @@ func (g *BundleGenerator) GenerateBundle(cfg *config.AgentConfig, rootfsSource s
 		return nil, fmt.Errorf("create bundle directory: %w", err)
 	}
 
-	// Generate OCI config.json
-	spec := GenerateSpec(cfg)
+	// Resolve absolute path for rootfs (runc requires absolute path)
+	absRootfs, err := filepath.Abs(rootfsSource)
+	if err != nil {
+		os.RemoveAll(bundlePath)
+		return nil, fmt.Errorf("resolve rootfs path: %w", err)
+	}
+
+	// Generate OCI config.json with absolute rootfs path
+	spec := GenerateSpecWithOptions(cfg, &SpecOptions{RootfsPath: absRootfs})
 	configPath := filepath.Join(bundlePath, "config.json")
 	configData, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
@@ -84,18 +91,11 @@ func (g *BundleGenerator) GenerateBundle(cfg *config.AgentConfig, rootfsSource s
 		return nil, fmt.Errorf("write config.json: %w", err)
 	}
 
-	// Create rootfs symlink to agent image
-	rootfsPath := filepath.Join(bundlePath, "rootfs")
-	if err := os.Symlink(rootfsSource, rootfsPath); err != nil {
-		os.RemoveAll(bundlePath)
-		return nil, fmt.Errorf("create rootfs symlink: %w", err)
-	}
-
 	return &Bundle{
 		ID:         containerID,
 		Path:       bundlePath,
 		ConfigPath: configPath,
-		RootfsPath: rootfsPath,
+		RootfsPath: absRootfs,
 	}, nil
 }
 
@@ -105,6 +105,21 @@ func (g *BundleGenerator) GenerateBundleWithOptions(cfg *config.AgentConfig, roo
 	bundlePath := filepath.Join(g.BundleDir, containerID)
 	if err := os.MkdirAll(bundlePath, 0755); err != nil {
 		return nil, fmt.Errorf("create bundle directory: %w", err)
+	}
+
+	// Resolve absolute path for rootfs (runc requires absolute path)
+	absRootfs, err := filepath.Abs(rootfsSource)
+	if err != nil {
+		os.RemoveAll(bundlePath)
+		return nil, fmt.Errorf("resolve rootfs path: %w", err)
+	}
+
+	// Ensure opts includes the absolute rootfs path
+	if opts == nil {
+		opts = &SpecOptions{}
+	}
+	if opts.RootfsPath == "" {
+		opts.RootfsPath = absRootfs
 	}
 
 	// Generate OCI config.json with options
@@ -120,18 +135,11 @@ func (g *BundleGenerator) GenerateBundleWithOptions(cfg *config.AgentConfig, roo
 		return nil, fmt.Errorf("write config.json: %w", err)
 	}
 
-	// Create rootfs symlink to agent image
-	rootfsPath := filepath.Join(bundlePath, "rootfs")
-	if err := os.Symlink(rootfsSource, rootfsPath); err != nil {
-		os.RemoveAll(bundlePath)
-		return nil, fmt.Errorf("create rootfs symlink: %w", err)
-	}
-
 	return &Bundle{
 		ID:         containerID,
 		Path:       bundlePath,
 		ConfigPath: configPath,
-		RootfsPath: rootfsPath,
+		RootfsPath: absRootfs,
 	}, nil
 }
 

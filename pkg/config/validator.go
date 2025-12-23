@@ -74,7 +74,18 @@ func validateModuleExists(cfg *AgentConfig) error {
 		modulePath = modulePath + ".py"
 	}
 
-	if _, err := os.Stat(modulePath); os.IsNotExist(err) {
+	// Check at root level first
+	if _, err := os.Stat(modulePath); err == nil {
+		return nil
+	}
+
+	// If not found, try agent/ subdirectory (new deploy structure)
+	modulePathInAgent := filepath.Join(cfg.AgentDir, "agent", cfg.Module)
+	if !strings.HasSuffix(modulePathInAgent, ".py") {
+		modulePathInAgent = modulePathInAgent + ".py"
+	}
+
+	if _, err := os.Stat(modulePathInAgent); os.IsNotExist(err) {
 		return NewFieldError(ErrCodeNotFound, "module", "module file not found: "+cfg.Module)
 	}
 

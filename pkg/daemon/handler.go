@@ -31,6 +31,7 @@ type RunResponse struct {
 	Output     map[string]interface{} `json:"output,omitempty"`
 	RawOutput  string                 `json:"raw_output,omitempty"`
 	Error      string                 `json:"error,omitempty"`
+	Stderr     string                 `json:"stderr,omitempty"`
 	DurationMs int64                  `json:"duration_ms"`
 }
 
@@ -111,6 +112,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		Output:     result.Output,
 		RawOutput:  result.RawOutput,
 		Error:      result.Error,
+		Stderr:     result.Stderr,
 		DurationMs: result.Duration.Milliseconds(),
 	}
 	writeJSON(w, http.StatusOK, resp)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -65,22 +66,47 @@ func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
 }
 
 // resolveImagePath determines the rootfs path for the agent.
-// In the full implementation, this would look up the deployed image.
-// For now, we use a convention-based approach.
+// It checks for deployed images in ~/.agentscale/agents/{name}/runtime/
+// and falls back to the agent directory if not deployed.
 func resolveImagePath(agentPath string) string {
-	// Check if there's a deployed image in ~/.agentscale/agents/
-	// If not, fall back to the agent directory itself (for development)
-
 	// Get agent name from path
 	agentName := filepath.Base(agentPath)
 
-	// Check for deployed image
-	// TODO: This should use a proper image registry
-	// For now, return empty to let the executor handle it
-	_ = agentName
+	// Try multiple possible home directories:
+	// 1. Current user's home (daemon might run as different user)
+	// 2. Extract home from agent path (for Lima/Docker scenarios where macOS home is mounted)
+	homeDirs := []string{}
 
-	// Return the agent path as the rootfs for now
-	// The deploy command creates a proper rootfs structure
+	// Add current user home
+	if home, err := os.UserHomeDir(); err == nil {
+		homeDirs = append(homeDirs, home)
+	}
+
+	// Extract home directory from agent path if it looks like /Users/<name>/...
+	// This handles Lima VM where macOS home is mounted at same path
+	if len(agentPath) > 7 && agentPath[:7] == "/Users/" {
+		// Find the home directory by locating the second slash after /Users/
+		for i := 7; i < len(agentPath); i++ {
+			if agentPath[i] == '/' {
+				homeDirs = append(homeDirs, agentPath[:i])
+				break
+			}
+		}
+	}
+
+	// Use deployed agent image
+	// Try each home directory until we find a valid deployed agent
+	for _, home := range homeDirs {
+		deployedPath := filepath.Join(home, ".agentscale", "agents", agentName)
+
+		// Verify it's a complete rootfs (must have /lib for dynamic linker)
+		if _, err := os.Stat(filepath.Join(deployedPath, "lib")); err == nil {
+			return deployedPath
+		}
+	}
+
+	// No valid deployed image found - return original path as fallback
+	// (will likely fail with clear error from runc)
 	return agentPath
 }
 
