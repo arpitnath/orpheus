@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os/exec"
 	goruntime "runtime"
 	"strings"
@@ -47,17 +46,16 @@ type ExecuteOptions struct {
 }
 
 // RunAgent executes the agent with the given configuration and entry point.
-// Uses platform-based runtime selection:
+// Platform-based runtime selection:
 //   - Linux + UseIsolate + RootFSPath: Use runc container
-//   - macOS + UseIsolate + RootFSPath: Use Docker container
-//   - Default: Run directly without isolation
+//   - macOS: Requires Lima VM (Phase 7+) - returns error if isolation requested
+//   - No isolation: Returns error (unsafe execution removed in Phase 6)
 func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions) *Result {
 	startTime := time.Now()
 
 	// Activity monitor setup (if enabled)
 	var monitor *ActivityMonitor
-	useActivityTimeout := opts != nil && opts.IdleTimeout > 0
-	if useActivityTimeout {
+	if opts != nil && opts.IdleTimeout > 0 {
 		monitor = NewActivityMonitor(opts.IdleTimeout, opts.MaxTimeout, opts.ActivityCheck)
 		defer monitor.Stop()
 	}
@@ -70,37 +68,32 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath strin
 	case "linux":
 		if useIsolation {
 			if runtime.RuncAvailable() {
-				if useActivityTimeout {
-					return runWithRuncAndMonitor(ctx, cfg, opts, monitor, startTime)
-				}
-				return runWithRunc(ctx, cfg, opts, startTime)
+				return runWithRunc(ctx, cfg, opts, monitor, startTime)
 			}
-			log.Println("WARN: runc not found, running without isolation")
+			return NewErrorResult("runc not available: install runc for container isolation", "", 1, time.Since(startTime))
 		}
+		// No isolation requested - this is an error (removed unsafe direct execution)
+		return NewErrorResult("isolation required: use --isolate with a deployed agent image", "", 1, time.Since(startTime))
 
 	case "darwin":
 		if useIsolation {
-			if runtime.DockerAvailable() {
-				log.Println("INFO: macOS - using Docker for isolation")
-				if useActivityTimeout {
-					return runWithDockerAndMonitor(ctx, cfg, opts, monitor, startTime)
-				}
-				return runWithDocker(ctx, cfg, opts, startTime)
-			}
-			log.Println("WARN: macOS - running without isolation (Docker not available)")
+			// Lima VM integration coming in Phase 7
+			// For now, return clear error message
+			return NewErrorResult(
+				"macOS isolation requires Lima VM (not yet implemented). "+
+					"Run 'agentscale vm start' once Lima support is added (Phase 7+)",
+				"", 1, time.Since(startTime))
 		}
-	}
+		return NewErrorResult("isolation required: macOS requires Lima VM for agent execution", "", 1, time.Since(startTime))
 
-	// Default: direct execution
-	if useActivityTimeout {
-		return runDirectExecWithMonitor(ctx, cfg, entrypointPath, opts, monitor, startTime)
+	default:
+		return NewErrorResult(fmt.Sprintf("unsupported platform: %s", goruntime.GOOS), "", 1, time.Since(startTime))
 	}
-	return runDirectExec(ctx, cfg, entrypointPath, opts, startTime)
 }
 
 // runWithRunc executes an agent in a runc container (Linux isolation).
-// Uses UUID-based container IDs for crash safety.
-func runWithRunc(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOptions, startTime time.Time) *Result {
+// Consolidated function that handles both monitored and non-monitored execution.
+func runWithRunc(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOptions, monitor *ActivityMonitor, startTime time.Time) *Result {
 	// Generate UUID-based container ID (prevents collisions)
 	containerID := fmt.Sprintf("agent-%s", uuid.New().String())
 
@@ -118,41 +111,7 @@ func runWithRunc(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOpti
 		input = opts.Input
 	}
 
-	// Run with runc (no activity monitor)
-	runc := runtime.NewRunc()
-	runcResult, err := runc.Run(ctx, bundle, input, nil)
-	if err != nil {
-		return NewErrorResult(err.Error(), "", 1, time.Since(startTime))
-	}
-
-	// Convert runc result to proxy result
-	duration := time.Since(startTime)
-	if runcResult.OOMKill {
-		return NewErrorResult("OOM killed: agent exceeded memory limit", runcResult.Stderr, runcResult.ExitCode, duration)
-	}
-	return ProcessResult(runcResult.Stdout, runcResult.Stderr, runcResult.Err, duration)
-}
-
-// runWithRuncAndMonitor executes an agent in a runc container with activity monitoring.
-func runWithRuncAndMonitor(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOptions, monitor *ActivityMonitor, startTime time.Time) *Result {
-	// Generate UUID-based container ID (prevents collisions)
-	containerID := fmt.Sprintf("agent-%s", uuid.New().String())
-
-	// Generate OCI bundle
-	bundleGen := oci.NewBundleGenerator()
-	bundle, err := bundleGen.GenerateBundle(cfg, opts.RootFSPath, containerID)
-	if err != nil {
-		return NewErrorResult(fmt.Sprintf("bundle generation: %v", err), "", 1, time.Since(startTime))
-	}
-	defer bundle.Cleanup()
-
-	// Get input
-	input := "{}"
-	if opts != nil && opts.Input != "" {
-		input = opts.Input
-	}
-
-	// Run with runc and activity monitor
+	// Run with runc (monitor can be nil - runc.Run handles it)
 	runc := runtime.NewRunc()
 	runcResult, err := runc.Run(ctx, bundle, input, monitor)
 	if err != nil {
@@ -165,65 +124,6 @@ func runWithRuncAndMonitor(ctx context.Context, cfg *config.AgentConfig, opts *E
 		return NewErrorResult("OOM killed: agent exceeded memory limit", runcResult.Stderr, runcResult.ExitCode, duration)
 	}
 	return ProcessResult(runcResult.Stdout, runcResult.Stderr, runcResult.Err, duration)
-}
-
-// runWithDocker executes an agent in a Docker container (macOS isolation).
-func runWithDocker(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOptions, startTime time.Time) *Result {
-	input := "{}"
-	if opts != nil && opts.Input != "" {
-		input = opts.Input
-	}
-
-	docker := runtime.NewDocker()
-	dockerResult, err := docker.Run(ctx, cfg, opts.RootFSPath, input, nil)
-	if err != nil {
-		return NewErrorResult(err.Error(), "", 1, time.Since(startTime))
-	}
-
-	duration := time.Since(startTime)
-	return ProcessResult(dockerResult.Stdout, dockerResult.Stderr, dockerResult.Err, duration)
-}
-
-// runWithDockerAndMonitor executes an agent in a Docker container with activity monitoring.
-func runWithDockerAndMonitor(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOptions, monitor *ActivityMonitor, startTime time.Time) *Result {
-	input := "{}"
-	if opts != nil && opts.Input != "" {
-		input = opts.Input
-	}
-
-	docker := runtime.NewDocker()
-	dockerResult, err := docker.Run(ctx, cfg, opts.RootFSPath, input, monitor)
-	if err != nil {
-		return NewErrorResult(err.Error(), "", 1, time.Since(startTime))
-	}
-
-	duration := time.Since(startTime)
-	return ProcessResult(dockerResult.Stdout, dockerResult.Stderr, dockerResult.Err, duration)
-}
-
-// runDirectExec executes an agent directly without isolation.
-// Used for macOS dev mode or Linux without runc.
-func runDirectExec(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions, startTime time.Time) *Result {
-	input := "{}"
-	if opts != nil && opts.Input != "" {
-		input = opts.Input
-	}
-
-	directResult := runtime.RunDirect(ctx, cfg, entrypointPath, input, nil)
-	duration := time.Since(startTime)
-	return ProcessResult(directResult.Stdout, directResult.Stderr, directResult.Err, duration)
-}
-
-// runDirectExecWithMonitor executes an agent directly with activity monitoring.
-func runDirectExecWithMonitor(ctx context.Context, cfg *config.AgentConfig, entrypointPath string, opts *ExecuteOptions, monitor *ActivityMonitor, startTime time.Time) *Result {
-	input := "{}"
-	if opts != nil && opts.Input != "" {
-		input = opts.Input
-	}
-
-	directResult := runtime.RunDirect(ctx, cfg, entrypointPath, input, monitor)
-	duration := time.Since(startTime)
-	return ProcessResult(directResult.Stdout, directResult.Stderr, directResult.Err, duration)
 }
 
 // ProcessResult handles the output from agent execution.
