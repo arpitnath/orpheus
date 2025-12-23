@@ -7,6 +7,7 @@ from agentscale.commands.run import run
 from agentscale.commands.client import invoke, stats, health
 from agentscale.commands.deploy import deploy
 from agentscale.commands import vm
+from agentscale.commands import daemon
 
 app = typer.Typer(
     name="agentscale",
@@ -46,6 +47,9 @@ app.command()(health)
 
 # Register VM sub-app (Lima management for macOS)
 app.add_typer(vm.app, name="vm")
+
+# Register daemon sub-app (Linux daemon management)
+app.add_typer(daemon.app, name="daemon")
 
 
 if __name__ == "__main__":
