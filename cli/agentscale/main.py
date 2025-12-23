@@ -13,6 +13,11 @@ from agentscale.commands.logs import logs
 from agentscale.commands.list import list_agents
 from agentscale.commands.ps import ps
 from agentscale.commands.runs import runs
+from agentscale.commands.inspect import inspect
+from agentscale.commands.undeploy import undeploy
+from agentscale.commands.validate import validate
+from agentscale.commands.healthcheck import health as healthcheck
+from agentscale.commands.test import test
 from agentscale.commands import vm
 from agentscale.commands import daemon
 
@@ -50,7 +55,6 @@ app.command()(run)
 app.command()(deploy)
 app.command()(invoke)
 app.command()(stats)
-app.command()(health)
 app.command()(shell)
 app.command(name="exec")(exec_command)
 app.command()(status)
@@ -58,6 +62,11 @@ app.command()(logs)
 app.command(name="list")(list_agents)
 app.command()(ps)
 app.command()(runs)
+app.command()(inspect)
+app.command()(undeploy)
+app.command()(validate)
+app.command()(healthcheck)
+app.command()(test)
 
 # Register VM sub-app (Lima management for macOS)
 app.add_typer(vm.app, name="vm")
