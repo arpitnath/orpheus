@@ -3,20 +3,23 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
 
 // Server is the agentscale daemon HTTP server.
 type Server struct {
-	socketPath string
+	config     *DaemonConfig
 	version    string
-	listener   net.Listener
+	listeners  []net.Listener // Multiple listeners (Unix socket + TCP)
 	httpServer *http.Server
 	startTime  time.Time
 
@@ -33,13 +36,14 @@ type RunningAgent struct {
 	Cancel    context.CancelFunc
 }
 
-// NewServer creates a new daemon server.
-func NewServer(socketPath, version string) *Server {
+// NewServer creates a new daemon server with the given configuration.
+func NewServer(config *DaemonConfig, version string) *Server {
 	s := &Server{
-		socketPath: socketPath,
-		version:    version,
-		startTime:  time.Now(),
-		running:    make(map[string]*RunningAgent),
+		config:    config,
+		version:   version,
+		startTime: time.Now(),
+		running:   make(map[string]*RunningAgent),
+		listeners: make([]net.Listener, 0),
 	}
 
 	mux := http.NewServeMux()
@@ -56,31 +60,54 @@ func NewServer(socketPath, version string) *Server {
 	return s
 }
 
-// ListenAndServe starts the server on the Unix socket.
+// ListenAndServe starts the server on configured listeners (Unix socket and/or TCP).
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	// Remove existing socket file
-	if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove socket: %w", err)
+	// Validate config
+	if err := s.config.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	// Create Unix socket listener
-	listener, err := net.Listen("unix", s.socketPath)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
-	s.listener = listener
-
-	// Set socket permissions (readable/writable by owner)
-	if err := os.Chmod(s.socketPath, 0600); err != nil {
-		listener.Close()
-		return fmt.Errorf("chmod socket: %w", err)
+	// Setup Unix socket listener (if enabled)
+	if s.config.UnixSocket.Enabled {
+		listener, err := s.setupUnixSocketListener()
+		if err != nil {
+			return fmt.Errorf("unix socket setup: %w", err)
+		}
+		s.listeners = append(s.listeners, listener)
+		log.Printf("Listening on Unix socket: %s", s.config.UnixSocket.Path)
 	}
 
-	// Start serving
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- s.httpServer.Serve(listener)
-	}()
+	// Setup TCP listener (if enabled)
+	if s.config.TCP.Enabled {
+		listener, err := s.setupTCPListener()
+		if err != nil {
+			// Close already created listeners
+			s.closeListeners()
+			return fmt.Errorf("tcp setup: %w", err)
+		}
+		s.listeners = append(s.listeners, listener)
+
+		protocol := "http"
+		if s.config.TCP.TLS.Enabled {
+			protocol = "https"
+		}
+		log.Printf("Listening on TCP: %s://%s", protocol, s.config.TCP.Bind)
+
+		// Warn if binding to all interfaces without TLS
+		if strings.HasPrefix(s.config.TCP.Bind, "0.0.0.0") && !s.config.TCP.TLS.Enabled {
+			log.Printf("WARNING: Binding to all network interfaces without TLS")
+			log.Printf("WARNING: Server is accessible from network without encryption")
+			log.Printf("WARNING: Consider enabling TLS or binding to 127.0.0.1 for local-only access")
+		}
+	}
+
+	// Serve on all listeners
+	errChan := make(chan error, len(s.listeners))
+	for _, listener := range s.listeners {
+		go func(l net.Listener) {
+			errChan <- s.httpServer.Serve(l)
+		}(listener)
+	}
 
 	// Wait for context cancellation or server error
 	select {
@@ -91,6 +118,73 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			return nil
 		}
 		return err
+	}
+}
+
+// setupUnixSocketListener creates a Unix socket listener.
+func (s *Server) setupUnixSocketListener() (net.Listener, error) {
+	socketPath := s.config.UnixSocket.Path
+
+	// Remove existing socket file
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("remove socket: %w", err)
+	}
+
+	// Create Unix socket listener
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+
+	// Set socket permissions (readable/writable by owner only)
+	if err := os.Chmod(socketPath, 0600); err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("chmod socket: %w", err)
+	}
+
+	return listener, nil
+}
+
+// setupTCPListener creates a TCP listener with optional TLS.
+func (s *Server) setupTCPListener() (net.Listener, error) {
+	bind := s.config.TCP.Bind
+
+	// TLS mode
+	if s.config.TCP.TLS.Enabled {
+		cert, err := tls.LoadX509KeyPair(
+			s.config.TCP.TLS.CertFile,
+			s.config.TCP.TLS.KeyFile,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("load TLS cert: %w", err)
+		}
+
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12, // Minimum TLS 1.2
+		}
+
+		listener, err := tls.Listen("tcp", bind, tlsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("tls listen: %w", err)
+		}
+
+		return listener, nil
+	}
+
+	// Plain TCP (no TLS)
+	listener, err := net.Listen("tcp", bind)
+	if err != nil {
+		return nil, fmt.Errorf("tcp listen: %w", err)
+	}
+
+	return listener, nil
+}
+
+// closeListeners closes all active listeners.
+func (s *Server) closeListeners() {
+	for _, listener := range s.listeners {
+		listener.Close()
 	}
 }
 
@@ -105,13 +199,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	s.mu.Unlock()
 
-	// Shutdown HTTP server
+	// Shutdown HTTP server (closes all listeners)
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		return err
 	}
 
-	// Remove socket file
-	os.Remove(s.socketPath)
+	// Remove Unix socket file (if Unix socket was enabled)
+	if s.config.UnixSocket.Enabled {
+		os.Remove(s.config.UnixSocket.Path)
+	}
+
 	return nil
 }
 

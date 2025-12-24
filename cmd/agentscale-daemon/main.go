@@ -18,7 +18,11 @@ import (
 const version = "0.1.0"
 
 func main() {
+	// Flags
 	socketPath := flag.String("socket", defaultSocket(), "Unix socket path")
+	tcpBind := flag.String("tcp-bind", "", "TCP bind address (e.g., :8080 or 0.0.0.0:8080)")
+	tlsCert := flag.String("tls-cert", "", "TLS certificate file")
+	tlsKey := flag.String("tls-key", "", "TLS key file")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
@@ -27,8 +31,31 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Build config from flags
+	config := &daemon.DaemonConfig{
+		UnixSocket: daemon.UnixSocketConfig{
+			Enabled: *socketPath != "",
+			Path:    *socketPath,
+		},
+		TCP: daemon.TCPConfig{
+			Enabled: *tcpBind != "",
+			Bind:    *tcpBind,
+			TLS: daemon.TLSConfig{
+				Enabled:  *tlsCert != "" && *tlsKey != "",
+				CertFile: *tlsCert,
+				KeyFile:  *tlsKey,
+			},
+		},
+	}
+
+	// If neither Unix socket nor TCP specified, use Unix socket default
+	if !config.UnixSocket.Enabled && !config.TCP.Enabled {
+		config.UnixSocket.Enabled = true
+		config.UnixSocket.Path = defaultSocket()
+	}
+
 	// Create server
-	server := daemon.NewServer(*socketPath, version)
+	server := daemon.NewServer(config, version)
 
 	// Handle graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

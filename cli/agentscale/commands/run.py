@@ -9,43 +9,26 @@ import httpx
 import typer
 
 from agentscale.utils.output import print_json, print_error
+from agentscale.utils.client import get_client, test_connection
+from agentscale.config import get_active_server
 
 app = typer.Typer()
 
 
-def get_daemon_socket() -> Path:
-    """Get daemon socket path based on OS."""
-    if sys.platform == "darwin":
-        # macOS: Lima-forwarded socket
-        return Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
-    # Linux: Local socket
-    return Path("/var/run/agentscale.sock")
-
-
-def daemon_available(socket_path: Path) -> bool:
-    """Check if daemon is running and healthy."""
-    if not socket_path.exists():
-        return False
-    try:
-        transport = httpx.HTTPTransport(uds=str(socket_path))
-        with httpx.Client(transport=transport, timeout=2) as client:
-            resp = client.get("http://localhost/v1/health")
-            return resp.status_code == 200
-    except Exception:
-        return False
-
-
 def run_via_daemon(
-    socket_path: Path,
     agent_dir: str,
     input_data: dict,
     memory: Optional[int],
     timeout: Optional[int],
     idle_timeout: Optional[int],
 ) -> dict:
-    """Execute agent via daemon."""
-    transport = httpx.HTTPTransport(uds=str(socket_path))
-    with httpx.Client(transport=transport, timeout=600) as client:
+    """Execute agent via daemon.
+
+    Uses smart client that auto-detects Unix socket vs TCP mode.
+    """
+    try:
+        client = get_client()
+
         request_body = {
             "agent_path": str(Path(agent_dir).resolve()),
             "input": input_data,
@@ -61,6 +44,23 @@ def run_via_daemon(
         resp = client.post("http://localhost/v1/agents/run", json=request_body)
         return resp.json()
 
+    except httpx.ConnectError:
+        server_config = get_active_server()
+        mode = server_config.get("mode", "unix_socket")
+
+        if mode == "unix_socket":
+            print_error(
+                "Cannot connect to daemon",
+                "Start daemon with: agentscale vm start (macOS) or agentscale daemon start (Linux)"
+            )
+        else:
+            url = server_config.get("url", "unknown")
+            print_error(
+                f"Cannot connect to server: {url}",
+                "Check that server is running and URL is correct"
+            )
+        raise typer.Exit(1)
+
 
 @app.command()
 def run(
@@ -72,24 +72,13 @@ def run(
 ) -> None:
     """Run an agent via the daemon.
 
-    Requires daemon to be running. Start with:
-      - macOS: agentscale vm start
-      - Linux: agentscale daemon start
+    Automatically connects to active server (local or remote).
+    Use 'agentscale login' to configure remote servers.
 
     Examples:
         echo '{"query": "hello"}' | agentscale run ./my-agent
         agentscale run ./my-agent --memory 512 --timeout 60
     """
-    # Check daemon availability
-    socket_path = get_daemon_socket()
-
-    if not daemon_available(socket_path):
-        if sys.platform == "darwin":
-            print_error("Daemon not running", "Start with: agentscale vm start")
-        else:
-            print_error("Daemon not running", "Start with: agentscale daemon start")
-        raise typer.Exit(1)
-
     # Read stdin
     input_data = {}
     if not sys.stdin.isatty():
@@ -100,21 +89,18 @@ def run(
             except json.JSONDecodeError:
                 input_data = {"raw_input": stdin_data}
 
-    # Execute via daemon
+    # Execute via daemon (smart client handles Unix socket vs TCP)
     try:
         output = run_via_daemon(
-            socket_path, agent_dir, input_data,
+            agent_dir, input_data,
             memory, timeout, idle_timeout
         )
         exit_code = 0 if output.get("status") == "success" else 1
-    except httpx.ConnectError:
-        print_error("Daemon connection failed", "Is the daemon running?")
-        raise typer.Exit(1)
     except httpx.TimeoutException:
         print_error("Request timeout", "Agent execution timed out")
         raise typer.Exit(1)
     except Exception as e:
-        print_error(f"Daemon error: {e}")
+        print_error(f"Error: {e}")
         raise typer.Exit(1)
 
     # Print output

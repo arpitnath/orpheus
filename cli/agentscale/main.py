@@ -18,6 +18,7 @@ from agentscale.commands.undeploy import undeploy
 from agentscale.commands.validate import validate
 from agentscale.commands.healthcheck import health as healthcheck
 from agentscale.commands.test import test
+from agentscale.commands.login import login
 from agentscale.commands import vm
 from agentscale.commands import daemon
 
@@ -67,6 +68,7 @@ app.command()(undeploy)
 app.command()(validate)
 app.command()(healthcheck)
 app.command()(test)
+app.command()(login)
 
 # Register VM sub-app (Lima management for macOS)
 app.add_typer(vm.app, name="vm")
