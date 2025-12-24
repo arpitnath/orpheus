@@ -10,9 +10,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"agentscale/pkg/auth"
 )
 
 // Server is the agentscale daemon HTTP server.
@@ -22,6 +25,10 @@ type Server struct {
 	listeners  []net.Listener // Multiple listeners (Unix socket + TCP)
 	httpServer *http.Server
 	startTime  time.Time
+
+	// Authentication (for TCP endpoints)
+	authStore   *auth.Store
+	rateLimiter *auth.RateLimiter
 
 	// Running agents (for status/kill endpoints)
 	running map[string]*RunningAgent
@@ -37,13 +44,40 @@ type RunningAgent struct {
 }
 
 // NewServer creates a new daemon server with the given configuration.
-func NewServer(config *DaemonConfig, version string) *Server {
+func NewServer(config *DaemonConfig, version string) (*Server, error) {
 	s := &Server{
 		config:    config,
 		version:   version,
 		startTime: time.Now(),
 		running:   make(map[string]*RunningAgent),
 		listeners: make([]net.Listener, 0),
+	}
+
+	// Initialize auth if TCP is enabled
+	if config.TCP.Enabled {
+		// Determine database path
+		// Default: /var/lib/agentscale/keys.db or ~/.agentscale/keys.db
+		dbPath := "/var/lib/agentscale/keys.db"
+		if _, err := os.Stat("/var/lib/agentscale"); os.IsNotExist(err) {
+			// Use home directory if /var/lib doesn't exist
+			home, _ := os.UserHomeDir()
+			dbPath = filepath.Join(home, ".agentscale", "keys.db")
+
+			// Ensure directory exists
+			os.MkdirAll(filepath.Dir(dbPath), 0755)
+		}
+
+		// Initialize auth store
+		store, err := auth.NewStore(dbPath)
+		if err != nil {
+			return nil, fmt.Errorf("init auth store: %w", err)
+		}
+		s.authStore = store
+
+		// Initialize rate limiter
+		s.rateLimiter = auth.NewRateLimiter()
+
+		log.Printf("Auth enabled: API keys database at %s", dbPath)
 	}
 
 	mux := http.NewServeMux()
@@ -57,7 +91,7 @@ func NewServer(config *DaemonConfig, version string) *Server {
 		WriteTimeout: 600 * time.Second, // Long timeout for agent execution
 	}
 
-	return s
+	return s, nil
 }
 
 // ListenAndServe starts the server on configured listeners (Unix socket and/or TCP).
@@ -67,6 +101,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
+	errChan := make(chan error, 2)
+
 	// Setup Unix socket listener (if enabled)
 	if s.config.UnixSocket.Enabled {
 		listener, err := s.setupUnixSocketListener()
@@ -75,6 +111,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		s.listeners = append(s.listeners, listener)
 		log.Printf("Listening on Unix socket: %s", s.config.UnixSocket.Path)
+
+		// Serve Unix socket WITHOUT auth (local trusted)
+		go func() {
+			errChan <- s.httpServer.Serve(listener)
+		}()
 	}
 
 	// Setup TCP listener (if enabled)
@@ -99,14 +140,20 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			log.Printf("WARNING: Server is accessible from network without encryption")
 			log.Printf("WARNING: Consider enabling TLS or binding to 127.0.0.1 for local-only access")
 		}
-	}
 
-	// Serve on all listeners
-	errChan := make(chan error, len(s.listeners))
-	for _, listener := range s.listeners {
-		go func(l net.Listener) {
-			errChan <- s.httpServer.Serve(l)
-		}(listener)
+		// Serve TCP WITH auth middleware (network untrusted)
+		authHandler := auth.AuthMiddleware(s.authStore, s.rateLimiter)(s.httpServer.Handler)
+		tcpServer := &http.Server{
+			Handler:      authHandler,
+			ReadTimeout:  s.httpServer.ReadTimeout,
+			WriteTimeout: s.httpServer.WriteTimeout,
+		}
+
+		log.Printf("Auth enabled for TCP endpoints (Unix socket remains unauthenticated)")
+
+		go func() {
+			errChan <- tcpServer.Serve(listener)
+		}()
 	}
 
 	// Wait for context cancellation or server error
