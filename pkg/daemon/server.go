@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"agentscale/pkg/auth"
+	"agentscale/pkg/mcp"
 )
 
 // Server is the agentscale daemon HTTP server.
@@ -85,6 +86,15 @@ func NewServer(config *DaemonConfig, version string) (*Server, error) {
 	mux.HandleFunc("/v1/agents/", s.handleAgent) // GET/DELETE /v1/agents/{id}
 	mux.HandleFunc("/v1/health", s.handleHealth)
 	mux.HandleFunc("/v1/deploy", s.handleDeploy) // POST /v1/deploy
+
+	// Initialize MCP if TCP is enabled (MCP requires authenticated access)
+	if config.TCP.Enabled {
+		mcpGetter := NewDaemonServerGetter(s)
+		mcpManager := mcp.NewMCPServerManager(mcpGetter)
+		mcpHandler := mcp.NewMCPHandler(mcpManager, s.authStore, s.rateLimiter)
+		mux.Handle("/mcp/", mcpHandler)
+		log.Printf("MCP endpoints enabled at /mcp/")
+	}
 
 	s.httpServer = &http.Server{
 		Handler:      mux,

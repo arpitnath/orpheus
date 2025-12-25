@@ -2,8 +2,10 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -87,19 +89,29 @@ func (s *Store) CreateKey(name string, requestsPerMinute int) (*APIKey, error) {
 	// Generate random key
 	key := generateKey()
 
+	// Derive org_id from API key hash (consistent with deploy_handler)
+	orgID := deriveOrgID(key)
+
 	// Insert into database
 	query := `
-		INSERT INTO api_keys (key, name, requests_per_minute)
-		VALUES (?, ?, ?)
+		INSERT INTO api_keys (key, name, org_id, requests_per_minute)
+		VALUES (?, ?, ?, ?)
 	`
 
-	_, err := s.db.Exec(query, key, name, requestsPerMinute)
+	_, err := s.db.Exec(query, key, name, orgID, requestsPerMinute)
 	if err != nil {
 		return nil, fmt.Errorf("insert key: %w", err)
 	}
 
 	// Return created key
 	return s.GetKey(key)
+}
+
+// deriveOrgID derives org_id from API key using SHA256 hash.
+// This matches the derivation in deploy_handler.go.
+func deriveOrgID(apiKey string) string {
+	hash := sha256.Sum256([]byte(apiKey))
+	return "org-" + hex.EncodeToString(hash[:])[:12]
 }
 
 // ValidateKey checks if a key is valid and active.
