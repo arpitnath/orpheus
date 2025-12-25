@@ -84,6 +84,7 @@ func NewServer(config *DaemonConfig, version string) (*Server, error) {
 	mux.HandleFunc("/v1/agents/run", s.handleRun)
 	mux.HandleFunc("/v1/agents/", s.handleAgent) // GET/DELETE /v1/agents/{id}
 	mux.HandleFunc("/v1/health", s.handleHealth)
+	mux.HandleFunc("/v1/deploy", s.handleDeploy) // POST /v1/deploy
 
 	s.httpServer = &http.Server{
 		Handler:      mux,

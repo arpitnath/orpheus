@@ -31,7 +31,7 @@ def login(
             timeout=10
         )
 
-        response = client.get("http://localhost/v1/health")
+        response = client.get("/v1/health")
 
         if response.status_code != 200:
             print_error(
