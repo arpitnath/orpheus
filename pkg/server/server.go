@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"agentscale/pkg/config"
+	"agentscale/pkg/mcp"
 	"agentscale/pkg/runtime"
 	"agentscale/pkg/scaling"
 )
@@ -43,6 +44,10 @@ type Server struct {
 	// HTTP
 	httpServer *http.Server
 	mux        *http.ServeMux
+
+	// MCP (Model Context Protocol) support
+	mcpManager *mcp.MCPServerManager
+	mcpEnabled bool
 
 	// Server-level lifecycle
 	ctx    context.Context
@@ -85,6 +90,11 @@ func New(serverCfg *config.ServerConfig) (*Server, error) {
 		}
 		s.instances[agentID] = instance
 	}
+
+	// Initialize MCP support (v0.1.0: always enabled)
+	s.mcpEnabled = true
+	s.mcpManager = mcp.NewMCPServerManager(s)
+	log.Printf("MCP server manager initialized")
 
 	// Setup routes
 	s.setupRoutes()
@@ -156,6 +166,15 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/invoke", s.handleInvoke)
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/stats", s.handleStats)
+
+	// MCP routes (if enabled)
+	if s.mcpEnabled && s.mcpManager != nil {
+		// Note: MCP handler doesn't have auth middleware yet in server mode
+		// Auth integration will be added when server.go gets auth support
+		mcpHandler := mcp.NewMCPHandler(s.mcpManager, nil, nil)
+		s.mux.Handle("/mcp/", mcpHandler)
+		log.Printf("MCP endpoints enabled at /mcp/")
+	}
 }
 
 // Start begins the server, starting all components and the HTTP listener.
@@ -345,6 +364,115 @@ func (s *Server) getAgentInstance(agentID string) (*AgentInstance, error) {
 		return nil, fmt.Errorf("unknown agent: %s", agentID)
 	}
 	return instance, nil
+}
+
+// GetAgentInstance returns an agent instance by ID (exported for MCP integration).
+// Implements mcp.ServerGetter interface.
+func (s *Server) GetAgentInstance(agentID string) (mcp.AgentInstance, error) {
+	instance, err := s.getAgentInstance(agentID)
+	if err != nil {
+		return nil, err
+	}
+	return instance, nil
+}
+
+// GetQueue implements mcp.AgentInstance interface.
+func (ai *AgentInstance) GetQueue() mcp.RequestQueue {
+	return &agentInstanceQueueAdapter{queue: ai.queue}
+}
+
+// GetConfig implements mcp.AgentInstance interface.
+func (ai *AgentInstance) GetConfig() mcp.AgentConfig {
+	return &agentConfigAdapter{cfg: ai.cfg}
+}
+
+// agentInstanceQueueAdapter adapts scaling.RequestQueue to mcp.RequestQueue.
+type agentInstanceQueueAdapter struct {
+	queue *scaling.RequestQueue
+}
+
+func (a *agentInstanceQueueAdapter) Enqueue(req mcp.Request) error {
+	// Create scaling.Request from mcp.Request
+	scalingReq := &scaling.Request{
+		ID:         req.GetID(),
+		Input:      req.GetInput(),
+		Context:    context.Background(), // Use background context for now
+		ResponseCh: make(chan *scaling.Response, 1),
+		QueuedAt:   time.Now(),
+	}
+
+	// Enqueue to actual scaling queue
+	if err := a.queue.Enqueue(context.Background(), scalingReq); err != nil {
+		return err
+	}
+
+	// Wait for response in background and forward to MCP channel
+	go func() {
+		resp := <-scalingReq.ResponseCh
+
+		// Convert scaling.Response to mcp.Response
+		mcpResp := &mcpResponseAdapter{
+			result:   &mcpResultAdapter{result: resp.Result},
+			err:      resp.Error,
+			duration: resp.Duration.Milliseconds(),
+		}
+
+		// Send to MCP request's response channel
+		req.GetResponseChannel() <- mcpResp
+	}()
+
+	return nil
+}
+
+// mcpResponseAdapter adapts scaling.Response to mcp.Response interface.
+type mcpResponseAdapter struct {
+	result   mcp.Result
+	err      error
+	duration int64
+}
+
+func (r *mcpResponseAdapter) GetResult() mcp.Result { return r.result }
+func (r *mcpResponseAdapter) GetError() error       { return r.err }
+func (r *mcpResponseAdapter) GetDuration() int64    { return r.duration }
+
+// mcpResultAdapter adapts scaling.Result to mcp.Result interface.
+type mcpResultAdapter struct {
+	result *scaling.Result
+}
+
+func (r *mcpResultAdapter) GetStatus() string {
+	if r.result == nil {
+		return "unknown"
+	}
+	return r.result.Status
+}
+
+func (r *mcpResultAdapter) GetOutput() map[string]interface{} {
+	if r.result == nil {
+		return nil
+	}
+	return r.result.Output
+}
+
+func (r *mcpResultAdapter) GetError() string {
+	if r.result == nil {
+		return ""
+	}
+	return r.result.Error
+}
+
+// agentConfigAdapter adapts config.AgentConfig to mcp.AgentConfig.
+type agentConfigAdapter struct {
+	cfg *config.AgentConfig
+}
+
+func (a *agentConfigAdapter) GetName() string {
+	return a.cfg.Name
+}
+
+func (a *agentConfigAdapter) GetDescription() string {
+	// AgentConfig doesn't have description field yet, return name
+	return fmt.Sprintf("AgentScale agent: %s", a.cfg.Name)
 }
 
 // ListAgents returns a list of all agent IDs.

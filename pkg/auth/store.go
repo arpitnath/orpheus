@@ -19,6 +19,7 @@ type Store struct {
 type APIKey struct {
 	Key               string
 	Name              string
+	OrgID             string     // Organization identifier (for multi-tenancy)
 	CreatedAt         time.Time
 	ExpiresAt         *time.Time
 	RequestsPerMinute int
@@ -47,6 +48,7 @@ func createTables(db *sql.DB) error {
 	CREATE TABLE IF NOT EXISTS api_keys (
 		key TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
+		org_id TEXT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		expires_at TIMESTAMP,
 		requests_per_minute INTEGER DEFAULT 100,
@@ -65,7 +67,18 @@ func createTables(db *sql.DB) error {
 	ON request_log(api_key, timestamp);
 	`
 
-	_, err := db.Exec(schema)
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Migrate existing keys: add org_id if missing
+	migrateSchema := `
+	UPDATE api_keys
+	SET org_id = 'org-' || substr(hex(randomblob(8)), 1, 12)
+	WHERE org_id IS NULL OR org_id = '';
+	`
+
+	_, err := db.Exec(migrateSchema)
 	return err
 }
 
@@ -111,17 +124,19 @@ func (s *Store) ValidateKey(key string) (*APIKey, error) {
 // GetKey retrieves a key by its value.
 func (s *Store) GetKey(key string) (*APIKey, error) {
 	query := `
-		SELECT key, name, created_at, expires_at, requests_per_minute, is_active
+		SELECT key, name, org_id, created_at, expires_at, requests_per_minute, is_active
 		FROM api_keys
 		WHERE key = ?
 	`
 
 	var apiKey APIKey
 	var expiresAt sql.NullTime
+	var orgID sql.NullString
 
 	err := s.db.QueryRow(query, key).Scan(
 		&apiKey.Key,
 		&apiKey.Name,
+		&orgID,
 		&apiKey.CreatedAt,
 		&expiresAt,
 		&apiKey.RequestsPerMinute,
@@ -135,6 +150,10 @@ func (s *Store) GetKey(key string) (*APIKey, error) {
 		return nil, fmt.Errorf("query key: %w", err)
 	}
 
+	if orgID.Valid {
+		apiKey.OrgID = orgID.String
+	}
+
 	if expiresAt.Valid {
 		apiKey.ExpiresAt = &expiresAt.Time
 	}
@@ -145,7 +164,7 @@ func (s *Store) GetKey(key string) (*APIKey, error) {
 // ListKeys returns all API keys.
 func (s *Store) ListKeys() ([]*APIKey, error) {
 	query := `
-		SELECT key, name, created_at, expires_at, requests_per_minute, is_active
+		SELECT key, name, org_id, created_at, expires_at, requests_per_minute, is_active
 		FROM api_keys
 		ORDER BY created_at DESC
 	`
@@ -160,10 +179,12 @@ func (s *Store) ListKeys() ([]*APIKey, error) {
 	for rows.Next() {
 		var apiKey APIKey
 		var expiresAt sql.NullTime
+		var orgID sql.NullString
 
 		err := rows.Scan(
 			&apiKey.Key,
 			&apiKey.Name,
+			&orgID,
 			&apiKey.CreatedAt,
 			&expiresAt,
 			&apiKey.RequestsPerMinute,
@@ -171,6 +192,10 @@ func (s *Store) ListKeys() ([]*APIKey, error) {
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan key: %w", err)
+		}
+
+		if orgID.Valid {
+			apiKey.OrgID = orgID.String
 		}
 
 		if expiresAt.Valid {
