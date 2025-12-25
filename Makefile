@@ -1,7 +1,8 @@
-.PHONY: all build build-runtime build-cli test test-go test-integration clean install dev-setup
+.PHONY: all build build-runtime build-daemon build-daemon-linux-arm64 build-daemon-linux-amd64 build-daemon-all build-cli test test-go test-integration clean install dev-setup
 
 # Variables
 BINARY_NAME=agentscale-runtime
+DAEMON_BINARY=agentscale-daemon
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS=-ldflags "-X main.Version=$(VERSION)"
 
@@ -11,6 +12,27 @@ all: build
 build-runtime:
 	@echo "Building runtime..."
 	@go build $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/agentscale-runtime
+
+# Build daemon (macOS/current platform)
+build-daemon:
+	@echo "Building daemon for current platform..."
+	@go build $(LDFLAGS) -o bin/$(DAEMON_BINARY) ./cmd/agentscale-daemon
+
+# Build daemon for Linux ARM64 (Apple Silicon Lima VM)
+# Note: Uses pure-Go SQLite (modernc.org/sqlite) for cross-compilation
+build-daemon-linux-arm64:
+	@echo "Building daemon for Linux ARM64..."
+	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/$(DAEMON_BINARY)-linux-arm64 ./cmd/agentscale-daemon
+
+# Build daemon for Linux AMD64 (Intel Lima VM)
+# Note: Uses pure-Go SQLite (modernc.org/sqlite) for cross-compilation
+build-daemon-linux-amd64:
+	@echo "Building daemon for Linux AMD64..."
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/$(DAEMON_BINARY)-linux-amd64 ./cmd/agentscale-daemon
+
+# Build all daemon binaries (current platform + Linux ARM64 + AMD64)
+build-daemon-all: build-daemon build-daemon-linux-arm64 build-daemon-linux-amd64
+	@echo "All daemon binaries built successfully"
 
 # Build Python CLI (install in editable mode)
 build-cli:

@@ -1,6 +1,7 @@
 """VM command implementation for Lima VM management on macOS."""
 
 import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,17 @@ app = typer.Typer(
     name="vm",
     help="Manage Lima VM for macOS agent execution",
 )
+
+
+def get_host_arch() -> str:
+    """Get host architecture for binary selection."""
+    machine = platform.machine().lower()
+    if machine in ("arm64", "aarch64"):
+        return "arm64"
+    elif machine in ("x86_64", "amd64"):
+        return "amd64"
+    else:
+        raise ValueError(f"Unsupported architecture: {machine}")
 
 
 def find_lima_template() -> Optional[Path]:
@@ -33,15 +45,28 @@ def find_lima_template() -> Optional[Path]:
 
 
 def find_daemon_binary_linux() -> Optional[Path]:
-    """Find the Linux daemon binary for Lima VM."""
+    """Find the Linux daemon binary for Lima VM deployment."""
+    arch = get_host_arch()
+    binary_name = f"agentscale-daemon-linux-{arch}"
+
     locations = [
         # Relative to CLI package (development)
-        Path(__file__).parent.parent.parent.parent / "bin" / "agentscale-daemon-linux",
+        Path(__file__).parent.parent.parent.parent / "bin" / binary_name,
         # ~/.agentscale/bin (installed)
-        Path.home() / ".agentscale" / "bin" / "agentscale-daemon-linux",
+        Path.home() / ".agentscale" / "bin" / binary_name,
     ]
 
     for loc in locations:
+        if loc.exists():
+            return loc
+
+    # Fallback: try without arch suffix (backward compat)
+    fallback_locations = [
+        Path(__file__).parent.parent.parent.parent / "bin" / "agentscale-daemon-linux",
+        Path.home() / ".agentscale" / "bin" / "agentscale-daemon-linux",
+    ]
+
+    for loc in fallback_locations:
         if loc.exists():
             return loc
 
@@ -52,9 +77,10 @@ def copy_daemon_to_vm() -> bool:
     """Copy Linux daemon binary into VM."""
     daemon_binary = find_daemon_binary_linux()
     if not daemon_binary:
+        arch = get_host_arch()
         print_error(
-            "Linux daemon binary not found",
-            "Build with: cd agentscale && GOOS=linux GOARCH=arm64 go build -o bin/agentscale-daemon-linux ./cmd/agentscale-daemon"
+            f"Linux daemon binary not found for {arch}",
+            f"Build with: cd agentscale && make build-daemon-linux-{arch}"
         )
         return False
 

@@ -76,15 +76,22 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, entrypointPath strin
 		return NewErrorResult("isolation required: use --isolate with a deployed agent image", "", 1, time.Since(startTime))
 
 	case "darwin":
-		if useIsolation {
-			// Lima VM integration coming in Phase 7
-			// For now, return clear error message
-			return NewErrorResult(
-				"macOS isolation requires Lima VM (not yet implemented). "+
-					"Run 'agentscale vm start' once Lima support is added (Phase 7+)",
-				"", 1, time.Since(startTime))
-		}
-		return NewErrorResult("isolation required: macOS requires Lima VM for agent execution", "", 1, time.Since(startTime))
+		// macOS cannot run containers natively.
+		//
+		// Architecture Note:
+		//   Normal operation: CLI → Lima VM → daemon (Linux) → runc
+		//   In daemon mode, this path should NEVER execute because
+		//   the daemon runs as a Linux binary inside Lima VM.
+		//
+		// This error only occurs if:
+		//   1. User hasn't started Lima VM ('agentscale vm start')
+		//   2. Direct (non-daemon) call to proxy.RunAgent() on macOS
+		//
+		// Solution: Ensure daemon is running in Lima VM.
+		return NewErrorResult(
+			"macOS requires Lima VM for agent execution. "+
+				"Start VM with: agentscale vm start",
+			"", 1, time.Since(startTime))
 
 	default:
 		return NewErrorResult(fmt.Sprintf("unsupported platform: %s", goruntime.GOOS), "", 1, time.Since(startTime))
