@@ -43,6 +43,9 @@ type ExecuteOptions struct {
 	IdleTimeout   time.Duration // No activity timeout
 	MaxTimeout    time.Duration // Absolute maximum timeout
 	ActivityCheck time.Duration // Activity check interval
+
+	// Streaming configuration (SSE real-time output)
+	StreamWriter runtime.StreamWriter // Optional: for real-time SSE event streaming
 }
 
 // RunAgent executes the agent with the given configuration and entry point.
@@ -118,9 +121,17 @@ func runWithRunc(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOpti
 		input = opts.Input
 	}
 
-	// Run with runc (monitor can be nil - runc.Run handles it)
+	// Run with runc (with or without streaming)
 	runc := runtime.NewRunc()
-	runcResult, err := runc.Run(ctx, bundle, input, monitor)
+	var runcResult *runtime.RuncResult
+
+	// Use streaming variant if StreamWriter is provided
+	if opts != nil && opts.StreamWriter != nil {
+		runcResult, err = runc.RunStreaming(ctx, bundle, input, monitor, opts.StreamWriter)
+	} else {
+		runcResult, err = runc.Run(ctx, bundle, input, monitor)
+	}
+
 	if err != nil {
 		return NewErrorResult(err.Error(), "", 1, time.Since(startTime))
 	}

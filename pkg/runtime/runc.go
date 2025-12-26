@@ -2,6 +2,7 @@
 package runtime
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -135,6 +136,110 @@ func (r *RuncRuntime) Run(ctx context.Context, bundle *oci.Bundle, input string,
 			exitCode = exitErr.ExitCode()
 		}
 		// Check for OOM kill (exit code 137 = 128 + 9 SIGKILL)
+		if exitCode == 137 {
+			oomKill = true
+		}
+	}
+
+	return &RuncResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		Err:      runErr,
+		ExitCode: exitCode,
+		OOMKill:  oomKill,
+	}, nil
+}
+
+// RunStreaming executes an agent in a runc container with real-time SSE output streaming.
+// Emits chunk events for each line of stdout/stderr while also buffering for final result.
+func (r *RuncRuntime) RunStreaming(
+	ctx context.Context,
+	bundle *oci.Bundle,
+	input string,
+	monitor ActivityMonitorReader,
+	streamWriter StreamWriter,
+) (*RuncResult, error) {
+	// Build runc command
+	cmd := exec.CommandContext(ctx, r.BinaryPath, "run", "--bundle", bundle.Path, bundle.ID)
+	cmd.Stdin = strings.NewReader(input)
+
+	// Set up pipes
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create stderr pipe: %w", err)
+	}
+
+	// Start container
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start runc: %w", err)
+	}
+
+	// Capture output with streaming
+	var stdout, stderr bytes.Buffer
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Wrap pipes with activity monitor if provided
+	var stdoutReader io.Reader = stdoutPipe
+	var stderrReader io.Reader = stderrPipe
+	if !isInterfaceNil(monitor) {
+		stdoutReader = monitor.MonitorReader(stdoutPipe, nil)
+		stderrReader = monitor.MonitorReader(stderrPipe, nil)
+	}
+
+	// Stream stdout
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stdoutReader)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// Emit chunk event
+			if streamWriter != nil {
+				streamWriter.WriteEvent(NewChunkEvent("stdout", line))
+			}
+
+			// Also buffer for final result
+			stdout.WriteString(line + "\n")
+		}
+	}()
+
+	// Stream stderr
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stderrReader)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// Emit chunk event
+			if streamWriter != nil {
+				streamWriter.WriteEvent(NewChunkEvent("stderr", line))
+			}
+
+			// Also buffer for final result
+			stderr.WriteString(line + "\n")
+		}
+	}()
+
+	// Wait for output capture to complete
+	wg.Wait()
+	runErr := cmd.Wait()
+
+	// Always cleanup container
+	r.Delete(bundle.ID)
+
+	// Determine exit code
+	exitCode := 0
+	oomKill := false
+	if runErr != nil {
+		exitCode = 1
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
 		if exitCode == 137 {
 			oomKill = true
 		}

@@ -11,6 +11,7 @@ import (
 	"agentscale/pkg/config"
 	"agentscale/pkg/generator"
 	"agentscale/pkg/proxy"
+	"agentscale/pkg/runtime"
 )
 
 // Execute runs an agent using the existing proxy.RunAgent infrastructure.
@@ -61,6 +62,57 @@ func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
 	opts.ActivityCheck = 5 * time.Second
 
 	// Execute agent using existing infrastructure
+	result := proxy.RunAgent(ctx, cfg, entrypointPath, opts)
+	return result, nil
+}
+
+// ExecuteStreaming runs an agent with real-time SSE output streaming.
+// Similar to Execute() but passes streamWriter for real-time event emission.
+func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime.StreamWriter) (*proxy.Result, error) {
+	// Load agent config
+	cfg, err := config.Load(req.AgentPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	// Generate entrypoint
+	gen := generator.New()
+	entrypointPath, err := gen.Generate(cfg, false) // sync execution
+	if err != nil {
+		return nil, fmt.Errorf("generate entrypoint: %w", err)
+	}
+	defer gen.Cleanup(entrypointPath)
+
+	// Resolve image path
+	imagePath := resolveImagePath(req.AgentPath)
+
+	// Build execute options with streaming
+	opts := &proxy.ExecuteOptions{
+		Input:        marshalInput(req.Input),
+		UseIsolate:   true,
+		RootFSPath:   imagePath,
+		StreamWriter: streamWriter, // Enable streaming
+	}
+
+	// Apply memory limits
+	if req.Options.MemoryLimit > 0 {
+		opts.MemoryLimit = req.Options.MemoryLimit
+		opts.MemoryTarget = req.Options.MemoryLimit / 2
+		opts.SwapEnabled = true
+	}
+
+	// Apply timeout options
+	if req.Options.IdleTimeout > 0 {
+		opts.IdleTimeout = time.Duration(req.Options.IdleTimeout) * time.Second
+	}
+	if req.Options.Timeout > 0 {
+		opts.MaxTimeout = time.Duration(req.Options.Timeout) * time.Second
+	}
+
+	// Activity check interval defaults to 5 seconds
+	opts.ActivityCheck = 5 * time.Second
+
+	// Execute agent with streaming enabled
 	result := proxy.RunAgent(ctx, cfg, entrypointPath, opts)
 	return result, nil
 }

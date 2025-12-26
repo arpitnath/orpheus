@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"agentscale/pkg/runtime"
 )
 
 // RunRequest is the request body for POST /v1/agents/run.
@@ -53,9 +55,16 @@ type HealthResponse struct {
 }
 
 // handleRun handles POST /v1/agents/run.
+// Supports both buffered (default) and streaming (SSE) modes via Accept header.
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Check if client requests streaming via Accept header
+	if r.Header.Get("Accept") == "text/event-stream" {
+		s.handleRunStreaming(w, r)
 		return
 	}
 
@@ -116,6 +125,105 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		DurationMs: result.Duration.Milliseconds(),
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleRunStreaming handles POST /v1/agents/run with SSE streaming.
+// Streams real-time output, progress, and completion events to the client.
+func (s *Server) handleRunStreaming(w http.ResponseWriter, r *http.Request) {
+	// Parse request (same as buffered mode)
+	var req RunRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
+		return
+	}
+
+	if req.AgentPath == "" {
+		writeError(w, http.StatusBadRequest, "agent_path is required")
+		return
+	}
+
+	// Create SSE writer and verify streaming is supported
+	sseWriter := runtime.NewSSEWriter(w)
+	if sseWriter == nil {
+		writeError(w, http.StatusInternalServerError, "streaming not supported by this connection")
+		return
+	}
+	defer sseWriter.Close()
+
+	// Set SSE headers (after writer validation)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+
+	// Generate agent ID
+	agentID := fmt.Sprintf("agent-%s", uuid.New().String()[:8])
+
+	// Send init event
+	sseWriter.WriteEvent(&runtime.StreamEvent{
+		Type:      "init",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"agent_id": agentID,
+		},
+	})
+
+	// Create cancellable context
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// Apply timeout if specified
+	if req.Options.Timeout > 0 {
+		var timeoutCancel context.CancelFunc
+		ctx, timeoutCancel = context.WithTimeout(ctx, time.Duration(req.Options.Timeout)*time.Second)
+		defer timeoutCancel()
+	}
+
+	// Register running agent
+	runningAgent := &RunningAgent{
+		ID:        agentID,
+		AgentPath: req.AgentPath,
+		StartedAt: time.Now(),
+		Cancel:    cancel,
+	}
+	s.registerAgent(runningAgent)
+	defer s.unregisterAgent(agentID)
+
+	// Execute agent with streaming
+	result, err := ExecuteStreaming(ctx, &req, sseWriter)
+
+	// Send error event if execution failed
+	if err != nil {
+		sseWriter.WriteEvent(&runtime.StreamEvent{
+			Type:      "error",
+			Timestamp: time.Now(),
+			Data: map[string]interface{}{
+				"error":       err.Error(),
+				"duration_ms": time.Since(runningAgent.StartedAt).Milliseconds(),
+			},
+		})
+		sseWriter.WriteEvent(&runtime.StreamEvent{
+			Type:      "completed",
+			Timestamp: time.Now(),
+			Data: map[string]interface{}{
+				"status":      "error",
+				"duration_ms": time.Since(runningAgent.StartedAt).Milliseconds(),
+			},
+		})
+		return
+	}
+
+	// Send completed event with final result
+	sseWriter.WriteEvent(&runtime.StreamEvent{
+		Type:      "completed",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"status":      string(result.Status),
+			"duration_ms": result.Duration.Milliseconds(),
+			"output":      result.Output,
+			"error":       result.Error,
+		},
+	})
 }
 
 // handleAgent handles GET/DELETE /v1/agents/{id}.
