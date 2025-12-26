@@ -23,6 +23,13 @@ func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
+	// Merge runtime environment variable overrides
+	if len(req.Env) > 0 {
+		for k, v := range req.Env {
+			cfg.Env = append(cfg.Env, k+"="+v)
+		}
+	}
+
 	// Generate entrypoint
 	gen := generator.New()
 	entrypointPath, err := gen.Generate(cfg, false) // sync execution
@@ -73,6 +80,13 @@ func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime
 	cfg, err := config.Load(req.AgentPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	// Merge runtime environment variable overrides
+	if len(req.Env) > 0 {
+		for k, v := range req.Env {
+			cfg.Env = append(cfg.Env, k+"="+v)
+		}
 	}
 
 	// Generate entrypoint

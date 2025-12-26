@@ -48,6 +48,13 @@ func Validate(cfg *AgentConfig) error {
 		return NewFieldError(ErrCodeInvalidValue, "timeout", "timeout must be a positive value")
 	}
 
+	// Validate environment variables
+	if len(cfg.Env) > 0 {
+		if err := ValidateEnvVars(cfg.Env); err != nil {
+			return NewFieldError(ErrCodeInvalidValue, "env", err.Error())
+		}
+	}
+
 	return nil
 }
 

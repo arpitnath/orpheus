@@ -18,6 +18,7 @@ type RunRequest struct {
 	AgentPath string                 `json:"agent_path"`
 	Input     map[string]interface{} `json:"input"`
 	Options   RunOptions             `json:"options"`
+	Env       map[string]string      `json:"env,omitempty"` // Runtime environment variable overrides
 }
 
 // RunOptions are optional execution parameters.

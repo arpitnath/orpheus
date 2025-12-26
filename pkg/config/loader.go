@@ -57,6 +57,22 @@ func Load(agentDir string) (*AgentConfig, error) {
 	// Apply defaults
 	ApplyDefaults(&cfg)
 
+	// Auto-load .env file from agent directory (if it exists)
+	dotEnvVars, err := AutoLoadDotEnv(absDir)
+	if err != nil {
+		return nil, WrapError(ErrCodeFileRead, "failed to load .env file", err)
+	}
+
+	// Resolve environment variable references (${VAR} and ${VAR:-default})
+	// Runtime overrides will be empty here (only used during execution)
+	if len(cfg.Env) > 0 {
+		resolved, err := ResolveEnvReferences(cfg.Env, nil, dotEnvVars)
+		if err != nil {
+			return nil, WrapError(ErrCodeInvalidValue, "failed to resolve env var references", err)
+		}
+		cfg.Env = resolved
+	}
+
 	// Validate configuration
 	if err := Validate(&cfg); err != nil {
 		return nil, err
