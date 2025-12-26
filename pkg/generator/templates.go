@@ -14,7 +14,7 @@ import inspect
 from {{.Module}} import {{.Entrypoint}}
 {{if .InputType}}from {{.Module}} import {{.InputType}}{{end}}
 
-async def main():
+def main():
     try:
         # Read input from stdin
         input_data = sys.stdin.read().strip()
@@ -32,9 +32,10 @@ async def main():
         result = {{.Entrypoint}}(data)
         {{end}}
 
-        # Handle both sync and async functions
-        if inspect.iscoroutine(result):
-            result = await result
+        # Handle async functions
+        if inspect.iscoroutine(result) or inspect.iscoroutinefunction({{.Entrypoint}}):
+            # Handler is async - run in event loop
+            result = asyncio.run(result) if inspect.iscoroutine(result) else asyncio.run({{.Entrypoint}}(data))
 
         # Handle result serialization
         if hasattr(result, 'model_dump'):
@@ -59,7 +60,7 @@ async def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()  # No asyncio.run() here - only use it if handler is async
 `
 
 // PythonAsyncTemplate is kept for backwards compatibility

@@ -21,6 +21,7 @@ from agentscale.commands.test import test
 from agentscale.commands.login import login
 from agentscale.commands import vm
 from agentscale.commands import daemon
+from agentscale.commands import server
 
 app = typer.Typer(
     name="agentscale",
@@ -75,6 +76,9 @@ app.add_typer(vm.app, name="vm")
 
 # Register daemon sub-app (Linux daemon management)
 app.add_typer(daemon.app, name="daemon")
+
+# Register server sub-app (TCP server with auth)
+app.add_typer(server.app, name="server")
 
 
 if __name__ == "__main__":

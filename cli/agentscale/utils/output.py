@@ -37,6 +37,8 @@ def print_info(message: str) -> None:
     console.print(f"[blue]ℹ[/blue] {message}")
 
 
-def print_warning(message: str) -> None:
+def print_warning(message: str, details: str = None) -> None:
     """Print warning message."""
     console.print(f"[yellow]⚠[/yellow] {message}")
+    if details:
+        console.print(f"[dim]{details}[/dim]")

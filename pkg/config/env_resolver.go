@@ -85,8 +85,7 @@ func resolveValue(
 		return defaultVal
 	})
 
-	// Then, resolve ${VAR} references (these MUST be defined)
-	unresolved := []string{}
+	// Then, resolve ${VAR} references (keep as-is if not found)
 	value = simpleRefRegex.ReplaceAllStringFunc(value, func(match string) string {
 		parts := simpleRefRegex.FindStringSubmatch(match)
 		if len(parts) < 2 {
@@ -106,15 +105,13 @@ func resolveValue(
 			return val
 		}
 
-		// Variable not found and no default - track for error
-		unresolved = append(unresolved, varName)
-		return ""
+		// Variable not found and no default - leave as ${VAR} for runtime injection
+		// This allows: agent.yaml has ${OPENAI_API_KEY}
+		//             → API request provides env: {"OPENAI_API_KEY": "sk-..."}
+		return match
 	})
 
-	// Error if any required variables were undefined
-	if len(unresolved) > 0 {
-		return "", fmt.Errorf("undefined variables: %v (use ${VAR:-default} to provide a default)", unresolved)
-	}
-
+	// Note: Unresolved ${VAR} references are kept as-is
+	// They will be resolved at runtime if provided via API env field
 	return value, nil
 }

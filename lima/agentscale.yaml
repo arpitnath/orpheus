@@ -69,6 +69,10 @@ portForwards:
   - guestSocket: "/var/run/agentscale.sock"
     hostSocket: "{{.Dir}}/sock/agentscale.sock"
 
+  # Forward TCP server port (for remote deployment and MCP)
+  - guestPort: 7777
+    hostPort: 7777
+
   # Forward metrics port (optional)
   - guestPort: 9090
     hostPort: 9090

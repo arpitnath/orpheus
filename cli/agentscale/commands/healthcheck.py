@@ -31,10 +31,10 @@ def health(
     # Check 1: VM/Daemon Status
     result = check_vm_or_daemon()
     if result["status"] == "pass":
-        print_success(f"✓ {result['component']:<18} {result['message']}")
+        print_success(f"{result['component']:<18} {result['message']}")
         checks_passed += 1
     elif result["status"] == "warn":
-        print_warning(f"⚠ {result['component']:<18} {result['message']}")
+        print_warning(f"{result['component']:<18} {result['message']}")
         warnings_found += 1
     else:
         print_error(result['component'], result['message'])
@@ -43,7 +43,7 @@ def health(
     # Check 2: Socket
     result = check_socket()
     if result["status"] == "pass":
-        print_success(f"✓ {result['component']:<18} {result['message']}")
+        print_success(f"{result['component']:<18} {result['message']}")
         checks_passed += 1
     else:
         print_error(result['component'], result['message'])
@@ -52,10 +52,10 @@ def health(
     # Check 3: Daemon Health
     result = check_daemon_health()
     if result["status"] == "pass":
-        print_success(f"✓ {result['component']:<18} {result['message']}")
+        print_success(f"{result['component']:<18} {result['message']}")
         checks_passed += 1
     elif result["status"] == "warn":
-        print_warning(f"⚠ {result['component']:<18} {result['message']}")
+        print_warning(f"{result['component']:<18} {result['message']}")
         warnings_found += 1
     else:
         print_error(result['component'], result['message'])
@@ -64,10 +64,10 @@ def health(
     # Check 4: Base Images
     result = check_base_images()
     if result["status"] == "pass":
-        print_success(f"✓ {result['component']:<18} {result['message']}")
+        print_success(f"{result['component']:<18} {result['message']}")
         checks_passed += 1
     elif result["status"] == "warn":
-        print_warning(f"⚠ {result['component']:<18} {result['message']}")
+        print_warning(f"{result['component']:<18} {result['message']}")
         warnings_found += 1
     else:
         print_error(result['component'], result['message'])
@@ -76,19 +76,19 @@ def health(
     # Check 5: Deployed Agents
     result = check_deployed_agents()
     if result["status"] == "pass":
-        print_success(f"✓ {result['component']:<18} {result['message']}")
+        print_success(f"{result['component']:<18} {result['message']}")
         checks_passed += 1
     elif result["status"] == "warn":
-        print_warning(f"⚠ {result['component']:<18} {result['message']}")
+        print_warning(f"{result['component']:<18} {result['message']}")
         warnings_found += 1
 
     # Check 6: Disk Space
     result = check_disk_space()
     if result["status"] == "pass":
-        print_success(f"✓ {result['component']:<18} {result['message']}")
+        print_success(f"{result['component']:<18} {result['message']}")
         checks_passed += 1
     elif result["status"] == "warn":
-        print_warning(f"⚠ {result['component']:<18} {result['message']}")
+        print_warning(f"{result['component']:<18} {result['message']}")
         warnings_found += 1
     else:
         print_error(result['component'], result['message'])
@@ -209,7 +209,7 @@ def check_deployed_agents() -> dict:
             count += 1
 
     if count == 0:
-        return {"status": "warn", "component": "Deployed Agents", "message": "None deployed"}
+        return {"status": "pass", "component": "Deployed Agents", "message": "None deployed"}
     else:
         return {"status": "pass", "component": "Deployed Agents", "message": f"{count} valid"}
 

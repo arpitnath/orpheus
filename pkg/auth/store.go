@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // Registers as "sqlite" driver
 )
 
 // Store manages API keys in SQLite database.
@@ -30,7 +30,7 @@ type APIKey struct {
 
 // NewStore creates or opens the API key database.
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath) // modernc.org/sqlite registers as "sqlite"
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

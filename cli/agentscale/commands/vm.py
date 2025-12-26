@@ -4,17 +4,24 @@ import os
 import platform
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
 import typer
 
-from agentscale.utils.output import print_error, print_success, print_info
+from agentscale.utils.output import print_error, print_success, print_info, print_warning
 
 app = typer.Typer(
     name="vm",
     help="Manage Lima VM for macOS agent execution",
 )
+
+# Timeout values for Lima operations (in seconds)
+LIMA_COMMAND_TIMEOUT = 30   # Quick commands (list, status)
+LIMA_START_TIMEOUT = 120    # VM creation/boot
+LIMA_STOP_TIMEOUT = 60      # VM shutdown
+LIMA_SSH_TIMEOUT = 30       # SSH connection attempts
 
 
 def get_host_arch() -> str:
@@ -91,21 +98,24 @@ def copy_daemon_to_vm() -> bool:
             "limactl", "copy",
             str(daemon_binary),
             "agentscale:/tmp/agentscale-daemon"
-        ], check=True, capture_output=True)
+        ], check=True, capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
         # Move to /usr/local/bin with sudo
         subprocess.run([
             "limactl", "shell", "agentscale", "--",
             "sudo", "mv", "/tmp/agentscale-daemon", "/usr/local/bin/agentscale-daemon"
-        ], check=True, capture_output=True)
+        ], check=True, capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
         # Make executable
         subprocess.run([
             "limactl", "shell", "agentscale", "--",
             "sudo", "chmod", "+x", "/usr/local/bin/agentscale-daemon"
-        ], check=True, capture_output=True)
+        ], check=True, capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
         return True
+    except subprocess.TimeoutExpired:
+        print_error("Operation timed out", "Lima VM may be unresponsive")
+        return False
     except subprocess.CalledProcessError as e:
         print_error(f"Failed to copy daemon binary: {e}")
         return False
@@ -129,14 +139,14 @@ def start_daemon_in_vm() -> bool:
         subprocess.run([
             "limactl", "shell", "agentscale", "--",
             "sudo", "pkill", "-f", "agentscale-daemon"
-        ], capture_output=True)  # Ignore errors if no process
+        ], capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)  # Ignore errors if no process
 
         # Start daemon with environment variables
         cmd = f"{env_prefix}nohup /usr/local/bin/agentscale-daemon --socket /var/run/agentscale.sock > /var/log/agentscale-daemon.log 2>&1 &"
         subprocess.run([
             "limactl", "shell", "agentscale", "--",
             "sudo", "bash", "-c", cmd
-        ], check=True, capture_output=True)
+        ], check=True, capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
         # Wait a moment for socket to be created
         time.sleep(1)
@@ -145,9 +155,12 @@ def start_daemon_in_vm() -> bool:
         subprocess.run([
             "limactl", "shell", "agentscale", "--",
             "sudo", "chmod", "666", "/var/run/agentscale.sock"
-        ], capture_output=True)
+        ], capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
         return True
+    except subprocess.TimeoutExpired:
+        print_error("Operation timed out", "Lima VM may be unresponsive")
+        return False
     except subprocess.CalledProcessError as e:
         print_error(f"Failed to start daemon: {e}")
         return False
@@ -155,13 +168,37 @@ def start_daemon_in_vm() -> bool:
 
 def wait_for_daemon_socket(timeout: int = 10) -> bool:
     """Wait for daemon socket to be available."""
-    import time
     socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
 
     for i in range(timeout):
         if socket_path.exists():
             return True
         time.sleep(1)
+
+    return False
+
+
+def wait_for_ssh_ready(max_attempts: int = 15, interval: float = 2.0) -> bool:
+    """
+    Wait for SSH to be ready inside the VM.
+
+    Probes SSH by running a simple echo command.
+    Returns True if SSH is ready, False if timeout.
+    """
+    for attempt in range(max_attempts):
+        try:
+            result = subprocess.run(
+                ["limactl", "shell", "agentscale", "--", "echo", "ready"],
+                capture_output=True,
+                text=True,
+                timeout=5,  # Quick timeout for each probe
+            )
+            if result.returncode == 0 and "ready" in result.stdout:
+                return True
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            pass
+
+        time.sleep(interval)
 
     return False
 
@@ -221,7 +258,7 @@ def start(
     if status == "Running":
         if force:
             print_info("Stopping existing VM...")
-            subprocess.run(["limactl", "stop", "agentscale"], check=True)
+            subprocess.run(["limactl", "stop", "agentscale"], check=True, timeout=LIMA_STOP_TIMEOUT)
         else:
             print_success("VM is already running")
             return
@@ -244,7 +281,8 @@ def start(
         try:
             subprocess.run(
                 ["limactl", "start", "--tty=false", f"--name=agentscale", str(template)],
-                check=True
+                check=True,
+                timeout=LIMA_START_TIMEOUT
             )
             print_success("VM created and started!")
         except subprocess.CalledProcessError as e:
@@ -256,7 +294,8 @@ def start(
         try:
             subprocess.run(
                 ["limactl", "start", "--tty=false", "agentscale"],
-                check=True
+                check=True,
+                timeout=LIMA_START_TIMEOUT
             )
             print_success("VM started!")
         except subprocess.CalledProcessError as e:
@@ -384,6 +423,13 @@ def ssh() -> None:
             "VM is not running",
             "Start it with: agentscale vm start"
         )
+        raise typer.Exit(1)
+
+    # Wait for SSH to be ready
+    print_info("Checking SSH availability...")
+    if not wait_for_ssh_ready(max_attempts=15, interval=2.0):
+        print_error("SSH not ready after 30 seconds")
+        print_info("VM may still be booting. Try again in a few seconds.")
         raise typer.Exit(1)
 
     print_info("Connecting to AgentScale VM...")

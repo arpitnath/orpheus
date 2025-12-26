@@ -556,17 +556,20 @@ import inspect
 from ${module} import ${entrypoint}
 ${input_type_import}
 
-async def main():
+def main():
     try:
         input_data = sys.stdin.read().strip()
         data = json.loads(input_data) if input_data else {}
 
         ${input_handling}
 
-        if inspect.iscoroutinefunction(${entrypoint}):
-            result = await result
-        elif inspect.iscoroutine(result):
-            result = await result
+        # Handle async handlers
+        if inspect.iscoroutinefunction(${entrypoint}) or inspect.iscoroutine(result):
+            # Handler is async - use asyncio.run() only for async handlers
+            if inspect.iscoroutine(result):
+                result = asyncio.run(result)
+            else:
+                result = asyncio.run(${entrypoint}(data))
 
         # Serialize result
         if hasattr(result, 'model_dump'):
@@ -586,7 +589,7 @@ async def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()  # Sync function - no event loop unless handler is async
 '''
 
     vars = {"module": module, "entrypoint": entrypoint}
