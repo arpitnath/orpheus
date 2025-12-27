@@ -1,8 +1,10 @@
 """Deploy command implementation."""
 
+import os
 import sys
 from pathlib import Path
 from typing import Optional
+import re
 
 import typer
 
@@ -11,6 +13,55 @@ from agentscale.utils.builder import build_agent_image, DeployError
 from agentscale.utils.archive import create_tar, calculate_checksum, get_tar_size_mb
 from agentscale.utils.client import get_client
 from agentscale.config import get_active_server
+
+
+def resolve_env_vars_for_deploy(env_list: list) -> list:
+    """Resolve ${VAR} and ${VAR:-default} from shell environment.
+
+    Args:
+        env_list: List of env strings like ["KEY=${VAR}", "KEY2=value"]
+
+    Returns:
+        List of resolved env strings with actual values
+
+    Raises:
+        DeployError: If required variable is not set
+    """
+    resolved = []
+
+    for env_str in env_list:
+        if '=' not in env_str:
+            continue
+
+        key, template = env_str.split('=', 1)
+
+        # Check for ${VAR:-default} pattern
+        default_match = re.match(r'\$\{([^}:]+):-([^}]*)\}', template)
+        if default_match:
+            var_name = default_match.group(1)
+            default_val = default_match.group(2)
+            value = os.environ.get(var_name, default_val)
+            resolved.append(f"{key}={value}")
+            continue
+
+        # Check for ${VAR} pattern
+        var_match = re.match(r'\$\{([^}]+)\}', template)
+        if var_match:
+            var_name = var_match.group(1)
+            value = os.environ.get(var_name)
+            if value is None:
+                raise DeployError(
+                    f"Environment variable {var_name} not set.\n\n"
+                    f"  Required by: env.{key}\n"
+                    f"  Set it with: export {var_name}=your-value"
+                )
+            resolved.append(f"{key}={value}")
+            continue
+
+        # No variable reference - use as-is
+        resolved.append(env_str)
+
+    return resolved
 
 
 def deploy(
@@ -123,6 +174,11 @@ def deploy_remote(build_result: dict, verbose: bool = False, quiet: bool = False
         )
         raise typer.Exit(1)
 
+    # Resolve environment variables from shell before deploying
+    resolved_env = []
+    if 'env' in build_result.get('agent_config', {}):
+        resolved_env = resolve_env_vars_for_deploy(build_result['agent_config']['env'])
+
     # Create tar of agent image
     if verbose:
         print_info("Creating archive...")
@@ -145,14 +201,18 @@ def deploy_remote(build_result: dict, verbose: bool = False, quiet: bool = False
     try:
         client = get_client(timeout=1800)  # 30 min timeout for large uploads
 
+        # Prepare form data with resolved env vars
+        import json
+        form_data = {
+            'agent_name': build_result['agent_name'],
+            'checksum': checksum,
+            'env': json.dumps(resolved_env),  # Send resolved env vars
+        }
+
         with open(tar_file, 'rb') as f:
             files = {'agent_tar': (tar_file.name, f, 'application/gzip')}
-            data = {
-                'agent_name': build_result['agent_name'],
-                'checksum': checksum
-            }
 
-            response = client.post('/v1/deploy', files=files, data=data)
+            response = client.post('/v1/deploy', files=files, data=form_data)
 
             # Check status code first (before printing success)
             if response.status_code != 200:

@@ -328,7 +328,8 @@ def build_agent_image(
         "agent_name": agent_config["name"],
         "image_path": str(agent_image_dir),
         "size_mb": size_mb,
-        "runtime": f"{agent_config['runtime']}-{agent_config['runtime_version']}"
+        "runtime": f"{agent_config['runtime']}-{agent_config['runtime_version']}",
+        "agent_config": agent_config  # Include for env resolution
     }
 
 

@@ -17,6 +17,7 @@ import (
 
 	"agentscale/pkg/auth"
 	"agentscale/pkg/mcp"
+	"agentscale/pkg/registry"
 )
 
 // Server is the agentscale daemon HTTP server.
@@ -30,6 +31,9 @@ type Server struct {
 	// Authentication (for TCP endpoints)
 	authStore   *auth.Store
 	rateLimiter *auth.RateLimiter
+
+	// Agent registry (for discovery and env vars)
+	registry registry.Registry
 
 	// Running agents (for status/kill endpoints)
 	running map[string]*RunningAgent
@@ -81,9 +85,27 @@ func NewServer(config *DaemonConfig, version string) (*Server, error) {
 		log.Printf("Auth enabled: API keys database at %s", dbPath)
 	}
 
+	// Initialize agent registry
+	registryPath := "/var/lib/agentscale/registry"
+	if _, err := os.Stat("/var/lib/agentscale"); os.IsNotExist(err) {
+		home, _ := os.UserHomeDir()
+		registryPath = filepath.Join(home, ".agentscale", "registry")
+	}
+
+	reg, err := registry.NewFileRegistry(registryPath)
+	if err != nil {
+		return nil, fmt.Errorf("init agent registry: %w", err)
+	}
+	s.registry = reg
+	log.Printf("Agent registry initialized at %s", registryPath)
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/agents/run", s.handleRun)
-	mux.HandleFunc("/v1/agents/", s.handleAgent) // GET/DELETE /v1/agents/{id}
+
+	// RESTful agent routes
+	mux.HandleFunc("/v1/agents/", s.handleAgentResource) // /{name}/run, /{name}/logs, etc.
+	mux.HandleFunc("/v1/agents", s.handleAgentsList)     // GET list agents
+
+	// Core endpoints
 	mux.HandleFunc("/v1/health", s.handleHealth)
 	mux.HandleFunc("/v1/deploy", s.handleDeploy) // POST /v1/deploy
 

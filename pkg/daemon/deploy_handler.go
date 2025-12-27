@@ -3,6 +3,7 @@ package daemon
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"agentscale/pkg/deploy"
+	"agentscale/pkg/registry"
 )
 
 // DeployResponse is the response for POST /v1/deploy.
@@ -145,7 +147,6 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// TODO: Load agent.yaml and validate
-	// TODO: Register with autoscaler (if multi-agent mode)
 
 	// Calculate deployed size
 	sizeMB := calculateDirSizeMB(agentDir)
@@ -153,10 +154,34 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	// Extract org_id from API key (for MCP endpoint)
 	orgID := getOrgIDFromRequest(r)
 
-	// Build endpoint URLs
+	// Parse form data to get resolved env vars (sent from CLI)
+	var resolvedEnv []string
+	if envData := r.FormValue("env"); envData != "" {
+		if unmarshalErr := json.Unmarshal([]byte(envData), &resolvedEnv); unmarshalErr != nil {
+			log.Printf("Warning: Failed to parse env data: %v", unmarshalErr)
+			// Continue without env vars
+		}
+	}
+
+	// Register agent in registry
+	if s.registry != nil {
+		regErr := s.registry.Register(registry.RegisteredAgent{
+			Name:        agentName,
+			Path:        agentDir,
+			ResolvedEnv: resolvedEnv,
+		})
+		if regErr != nil {
+			log.Printf("Warning: Failed to register agent in registry: %v", regErr)
+			// Continue anyway - registration is optional for now
+		} else {
+			log.Printf("Agent '%s' registered in registry", agentName)
+		}
+	}
+
+	// Build endpoint URLs (NEW RESTful format)
 	serverDomain := r.Host // Use request host for now
 	endpoints := map[string]string{
-		"http": fmt.Sprintf("http://%s/v1/agents/run?agent=%s", serverDomain, agentName),
+		"http": fmt.Sprintf("http://%s/v1/agents/%s/run", serverDomain, agentName),
 		"mcp":  fmt.Sprintf("mcp://%s/mcp/%s/agents/%s", serverDomain, orgID, agentName),
 	}
 
