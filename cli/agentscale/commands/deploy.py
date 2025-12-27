@@ -19,6 +19,9 @@ def deploy(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing deployment"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Don't use pip cache for dependencies"),
     remote: bool = typer.Option(False, "--remote", help="Deploy to remote server"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+    json_output: bool = typer.Option(False, "--json", help="JSON output for scripting"),
 ) -> None:
     """Deploy an agent by building a complete self-contained image.
 
@@ -50,8 +53,15 @@ def deploy(
         print_error("agent.yaml not found", f"Expected at: {agent_yaml}")
         raise typer.Exit(1)
 
-    print_info(f"Deploying agent from: {agent_path}")
-    print("")
+    # CI detection
+    import os
+    is_ci = os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS')
+    if is_ci and not verbose:
+        quiet = True
+
+    if not quiet and not json_output:
+        print_info(f"Deploying agent from: {agent_path}")
+        print("")
 
     # Build agent image
     try:
@@ -59,12 +69,14 @@ def deploy(
             agent_path=str(agent_dir.absolute()),
             force=force,
             no_cache=no_cache,
-            config_path=config
+            config_path=config,
+            verbose=verbose,
+            quiet=quiet
         )
 
         if remote:
             # Remote deployment
-            deploy_remote(result)
+            deploy_remote(result, verbose=verbose, quiet=quiet, json_output=json_output)
         else:
             # Local deployment (existing behavior)
             print("")
@@ -87,16 +99,20 @@ def deploy(
         raise typer.Exit(1)
 
 
-def deploy_remote(build_result: dict) -> None:
+def deploy_remote(build_result: dict, verbose: bool = False, quiet: bool = False, json_output: bool = False) -> None:
     """Deploy agent to remote server.
 
     Args:
         build_result: Result from build_agent_image()
+        verbose: Show detailed output
+        quiet: Minimal output
+        json_output: JSON format output
     """
     import httpx
 
-    print_info("Deploying to remote server...")
-    print("")
+    if verbose:
+        print_info("Deploying to remote server...")
+        print("")
 
     # Get active server
     server_config = get_active_server()
@@ -108,19 +124,24 @@ def deploy_remote(build_result: dict) -> None:
         raise typer.Exit(1)
 
     # Create tar of agent image
-    print_info("Creating archive...")
+    if verbose:
+        print_info("Creating archive...")
     image_path = Path(build_result['image_path'])
     tar_file = create_tar(image_path)
     tar_size_mb = get_tar_size_mb(tar_file)
-    print_info(f"Archive created: {tar_file.name} ({tar_size_mb} MB)")
+    if verbose:
+        print_info(f"Archive created: {tar_file.name} ({tar_size_mb} MB)")
 
     # Calculate checksum
-    print_info("Calculating checksum...")
+    if verbose:
+        print_info("Calculating checksum...")
     checksum = calculate_checksum(tar_file)
-    print_info(f"Checksum: {checksum[:16]}...")
+    if verbose:
+        print_info(f"Checksum: {checksum[:16]}...")
 
     # Upload to server
-    print_info("Uploading to server...")
+    if verbose:
+        print_info("Uploading to server...")
     try:
         client = get_client(timeout=1800)  # 30 min timeout for large uploads
 
@@ -148,20 +169,35 @@ def deploy_remote(build_result: dict) -> None:
                 print_error("Invalid response from server", f"Response: {deploy_response}")
                 raise typer.Exit(1)
 
-            # Success - now safe to print
-            print("")
-            print_success("Agent deployed to remote server!")
-            print("")
-            print(f"  Agent:   {deploy_response.get('agent_name')}")
-            print(f"  Status:  {deploy_response.get('status')}")
-            print(f"  Size:    {deploy_response.get('size_mb')} MB")
-            print("")
-
-            if 'endpoints' in deploy_response and deploy_response['endpoints']:
-                print("Endpoints:")
-                for name, url in deploy_response['endpoints'].items():
-                    print(f"  {name}: {url}")
+            # Success - output based on mode
+            if json_output:
+                # JSON output for scripting
+                import json
+                output_data = {
+                    "success": True,
+                    "agent_name": deploy_response.get('agent_name'),
+                    "endpoints": deploy_response.get('endpoints', {}),
+                    "size_mb": deploy_response.get('size_mb')
+                }
+                print(json.dumps(output_data))
+            elif quiet:
+                # Minimal output - just agent name
+                print(deploy_response.get('agent_name'))
+            else:
+                # Default: Clean formatted output
                 print("")
+                print_success("Agent deployed to remote server!")
+                print("")
+                print(f"  Agent:   {deploy_response.get('agent_name')}")
+                print(f"  Status:  {deploy_response.get('status')}")
+                print(f"  Size:    {deploy_response.get('size_mb')} MB")
+                print("")
+
+                if 'endpoints' in deploy_response and deploy_response['endpoints']:
+                    print("Endpoints:")
+                    for name, url in deploy_response['endpoints'].items():
+                        print(f"  {name}: {url}")
+                    print("")
 
     except httpx.HTTPStatusError as e:
         error_detail = e.response.json().get('error', str(e))

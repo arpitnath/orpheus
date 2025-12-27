@@ -14,7 +14,8 @@ class ConfigUpdateError(Exception):
 def update_agentscale_yaml(
     agent_config: Dict[str, Any],
     agent_image_dir: Path,
-    config_path: Optional[str] = None
+    config_path: Optional[str] = None,
+    verbose: bool = False
 ) -> None:
     """Add or update agent entry in agentscale.yaml.
 
@@ -48,7 +49,8 @@ def update_agentscale_yaml(
         except yaml.YAMLError as e:
             raise ConfigUpdateError(f"Failed to parse {yaml_path}: {e}")
     else:
-        print(f"[config] Creating new configuration at {yaml_path}")
+        if verbose:
+            print(f"[config] Creating new configuration at {yaml_path}")
         config = create_default_config()
 
     # Ensure agents section exists
@@ -59,7 +61,8 @@ def update_agentscale_yaml(
     agent_id = agent_config["name"]
 
     if agent_id in config["agents"]:
-        print(f"[config] Agent '{agent_id}' already exists, updating...")
+        if verbose:
+            print(f"[config] Agent '{agent_id}' already exists, updating...")
 
     config["agents"][agent_id] = {
         "image": str(agent_image_dir),

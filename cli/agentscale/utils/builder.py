@@ -208,7 +208,9 @@ def build_agent_image(
     agent_path: str,
     force: bool = False,
     no_cache: bool = False,
-    config_path: Optional[str] = None
+    config_path: Optional[str] = None,
+    verbose: bool = False,
+    quiet: bool = False
 ) -> Dict[str, Any]:
     """Build complete agent image with runtime, dependencies, and code.
 
@@ -225,24 +227,30 @@ def build_agent_image(
         DeployError: If build fails
     """
     # Step 1: Read agent configuration
-    print("[deploy] Reading agent configuration...")
+    if verbose:
+        print("[deploy] Reading agent configuration...")
     agent_config = read_agent_config(agent_path)
 
-    print(f"[deploy] Agent: {agent_config['name']}")
-    print(f"[deploy] Runtime: {agent_config['runtime']} {agent_config['runtime_version']}")
-    print("")
+    if verbose:
+        print(f"[deploy] Agent: {agent_config['name']}")
+        print(f"[deploy] Runtime: {agent_config['runtime']} {agent_config['runtime_version']}")
+        print("")
 
     # Step 2: Find base image
-    print("[deploy] Finding base image...")
+    if verbose:
+        print("[deploy] Finding base image...")
     base_image_path = find_base_image(agent_config["runtime"], agent_config["runtime_version"])
-    print(f"[deploy] ✓ Base image: {base_image_path}")
-    print("")
+    if verbose:
+        print(f"[deploy] ✓ Base image: {base_image_path}")
+        print("")
 
     # Step 3: Create agent image directory
-    print("[deploy] Creating agent image structure...")
+    if verbose:
+        print("[deploy] Creating agent image structure...")
     agent_image_dir = create_agent_image_dir(agent_config["name"], force=force)
-    print(f"[deploy] ✓ Created: {agent_image_dir}")
-    print("")
+    if verbose:
+        print(f"[deploy] ✓ Created: {agent_image_dir}")
+        print("")
 
     # Remaining steps will be implemented in subsequent tasks
     # For now, return basic result
@@ -250,35 +258,43 @@ def build_agent_image(
     size_bytes, size_mb = calculate_size(agent_image_dir)
 
     # Step 4: Copy runtime from base image (creates complete rootfs)
-    print("[deploy] Step 1/5: Copying runtime...")
+    if verbose:
+        print("[deploy] Step 1/5: Copying runtime...")
     copy_runtime(base_image_path, agent_image_dir)
     # Calculate size after base image copy
     base_size_bytes, base_size_mb = calculate_size(agent_image_dir)
-    print(f"[deploy] ✓ Runtime copied ({base_size_mb}MB)")
-    print("")
+    if verbose:
+        print(f"[deploy] ✓ Runtime copied ({base_size_mb}MB)")
+        print("")
 
     # Step 5: Install dependencies
-    print("[deploy] Step 2/5: Installing dependencies...")
+    if verbose:
+        print("[deploy] Step 2/5: Installing dependencies...")
     packages_dir = agent_image_dir / "packages"
-    install_dependencies(agent_path, packages_dir, no_cache)
+    install_dependencies(agent_path, packages_dir, no_cache, verbose=verbose)
     deps_size_bytes, deps_size_mb = calculate_size(packages_dir)
-    if deps_size_mb > 0:
+    if verbose and deps_size_mb > 0:
         print(f"[deploy] ✓ Dependencies installed ({deps_size_mb}MB)")
-    print("")
+    if verbose:
+        print("")
 
     # Step 6: Copy agent code
-    print("[deploy] Step 3/5: Copying agent code...")
+    if verbose:
+        print("[deploy] Step 3/5: Copying agent code...")
     agent_code_dir = agent_image_dir / "agent"
     copy_agent_code(agent_path, agent_code_dir)
     code_size_bytes, code_size_mb = calculate_size(agent_code_dir)
-    print(f"[deploy] ✓ Agent code copied ({code_size_mb}MB)")
-    print("")
+    if verbose:
+        print(f"[deploy] ✓ Agent code copied ({code_size_mb}MB)")
+        print("")
 
     # Step 6.5: Generate entrypoint
-    print("[deploy] Step 4/5: Generating entrypoint...")
+    if verbose:
+        print("[deploy] Step 4/5: Generating entrypoint...")
     generate_entrypoint(agent_config, agent_code_dir)
-    print(f"[deploy] ✓ Entrypoint generated")
-    print("")
+    if verbose:
+        print(f"[deploy] ✓ Entrypoint generated")
+        print("")
 
     # Step 6.6: Copy agent.yaml to root (daemon expects it there)
     agent_yaml_src = agent_code_dir / "agent.yaml"
@@ -287,20 +303,24 @@ def build_agent_image(
         shutil.copy2(agent_yaml_src, agent_yaml_dst)
 
     # Step 7: Create manifest
-    print("[deploy] Step 5/5: Creating manifest...")
+    if verbose:
+        print("[deploy] Step 5/5: Creating manifest...")
     create_manifest(agent_config, agent_image_dir, base_image_path)
-    print(f"[deploy] ✓ Manifest created")
-    print("")
+    if verbose:
+        print(f"[deploy] ✓ Manifest created")
+        print("")
 
     # Step 8: Update agentscale.yaml
     if not config_path and not os.path.exists("agentscale.yaml"):
         config_path = None  # Will handle in config_updater
 
     if config_path is not False:  # Allow skipping with --skip-config
-        print("[deploy] Updating agentscale.yaml...")
+        if verbose:
+            print("[deploy] Updating agentscale.yaml...")
         from agentscale.utils.config_updater import update_agentscale_yaml
-        update_agentscale_yaml(agent_config, agent_image_dir, config_path)
-        print(f"[deploy] ✓ Configuration updated")
+        update_agentscale_yaml(agent_config, agent_image_dir, config_path, verbose=verbose)
+        if verbose:
+            print(f"[deploy] ✓ Configuration updated")
 
     size_bytes, size_mb = calculate_size(agent_image_dir)
 
@@ -355,7 +375,7 @@ def copy_runtime(base_image_path: Path, agent_image_dir: Path) -> None:
 # Dependency Installation
 # ============================================================================
 
-def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = False) -> None:
+def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = False, verbose: bool = False) -> None:
     """Install Python dependencies from requirements.txt.
 
     On macOS, downloads Linux ARM64 packages for Lima VM execution.
@@ -369,7 +389,8 @@ def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = F
 
     # Handle missing requirements.txt
     if not requirements_file.exists():
-        print("[deploy] No requirements.txt found, skipping dependencies")
+        if verbose:
+            print("[deploy] No requirements.txt found, skipping dependencies")
         return
 
     # Read and count packages
@@ -377,10 +398,12 @@ def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = F
         lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
     if not lines:
-        print("[deploy] requirements.txt is empty, skipping dependencies")
+        if verbose:
+            print("[deploy] requirements.txt is empty, skipping dependencies")
         return
 
-    print(f"[deploy] Installing {len(lines)} package(s) for Linux ARM64...")
+    if verbose:
+        print(f"[deploy] Installing {len(lines)} package(s) for Linux ARM64...")
 
     # Ensure packages directory exists
     packages_dir.mkdir(parents=True, exist_ok=True)

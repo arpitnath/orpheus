@@ -4,6 +4,10 @@ import json
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TransferSpeedColumn
+from rich.live import Live
+from rich.spinner import Spinner
+from rich.text import Text
 
 console = Console()
 error_console = Console(stderr=True)
@@ -42,3 +46,25 @@ def print_warning(message: str, details: str = None) -> None:
     console.print(f"[yellow]⚠[/yellow] {message}")
     if details:
         console.print(f"[dim]{details}[/dim]")
+
+
+def create_deploy_progress() -> Progress:
+    """Create progress tracker for deploy operations."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TransferSpeedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    )
+
+
+def show_spinner(message: str):
+    """Show a spinner with message for operations of unknown duration."""
+    return Live(
+        Spinner("dots", text=Text(message, style="blue")),
+        console=console,
+        refresh_per_second=10,
+    )
