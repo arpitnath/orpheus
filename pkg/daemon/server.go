@@ -18,6 +18,7 @@ import (
 	"agentscale/pkg/auth"
 	"agentscale/pkg/mcp"
 	"agentscale/pkg/registry"
+	"agentscale/pkg/scaling"
 )
 
 // Server is the agentscale daemon HTTP server.
@@ -35,9 +36,17 @@ type Server struct {
 	// Agent registry (for discovery and env vars)
 	registry registry.Registry
 
+	// Autoscaling (NEW - integrates pkg/scaling)
+	poolManager *PoolManager
+	autoscaler  *scaling.BasicAutoscaler
+
 	// Running agents (for status/kill endpoints)
 	running map[string]*RunningAgent
 	mu      sync.RWMutex
+
+	// Lifecycle
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // RunningAgent tracks an in-flight agent execution.
@@ -50,12 +59,17 @@ type RunningAgent struct {
 
 // NewServer creates a new daemon server with the given configuration.
 func NewServer(config *DaemonConfig, version string) (*Server, error) {
+	// Create server context for lifecycle management
+	ctx, cancel := context.WithCancel(context.Background())
+
 	s := &Server{
 		config:    config,
 		version:   version,
 		startTime: time.Now(),
 		running:   make(map[string]*RunningAgent),
 		listeners: make([]net.Listener, 0),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 
 	// Initialize auth if TCP is enabled
@@ -99,6 +113,16 @@ func NewServer(config *DaemonConfig, version string) (*Server, error) {
 	s.registry = reg
 	log.Printf("Agent registry initialized at %s", registryPath)
 
+	// Initialize autoscaler (5 second interval for scaling checks)
+	autoscaler := scaling.NewAutoscalerWithInterval(5 * time.Second)
+	s.autoscaler = autoscaler
+	log.Printf("Autoscaler initialized (interval: 5s)")
+
+	// Initialize pool manager
+	poolManager := NewPoolManager(reg, autoscaler, ctx)
+	s.poolManager = poolManager
+	log.Printf("Pool manager initialized")
+
 	mux := http.NewServeMux()
 
 	// RESTful agent routes
@@ -132,6 +156,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// Validate config
 	if err := s.config.Validate(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	// Start autoscaler (NEW - for worker pool scaling)
+	if s.autoscaler != nil {
+		if err := s.autoscaler.Start(s.ctx); err != nil {
+			return fmt.Errorf("start autoscaler: %w", err)
+		}
+		log.Printf("Autoscaler started")
 	}
 
 	errChan := make(chan error, 2)
@@ -270,7 +302,23 @@ func (s *Server) closeListeners() {
 
 // Shutdown gracefully shuts down the server.
 func (s *Server) Shutdown(ctx context.Context) error {
-	// Cancel all running agents
+	log.Printf("Shutting down server...")
+
+	// Stop autoscaler (NEW - stop scaling decisions)
+	if s.autoscaler != nil {
+		if err := s.autoscaler.Stop(); err != nil {
+			log.Printf("Error stopping autoscaler: %v", err)
+		}
+	}
+
+	// Shutdown pool manager (NEW - drain worker pools)
+	if s.poolManager != nil {
+		if err := s.poolManager.Shutdown(ctx); err != nil {
+			log.Printf("Error shutting down pool manager: %v", err)
+		}
+	}
+
+	// Cancel all running agents (direct executions, not pooled)
 	s.mu.Lock()
 	for _, agent := range s.running {
 		if agent.Cancel != nil {
@@ -278,6 +326,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 	s.mu.Unlock()
+
+	// Cancel server context
+	if s.cancel != nil {
+		s.cancel()
+	}
 
 	// Shutdown HTTP server (closes all listeners)
 	if err := s.httpServer.Shutdown(ctx); err != nil {
@@ -289,6 +342,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		os.Remove(s.config.UnixSocket.Path)
 	}
 
+	log.Printf("Server shutdown complete")
 	return nil
 }
 
