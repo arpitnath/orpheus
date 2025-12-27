@@ -132,6 +132,7 @@ func NewServer(config *DaemonConfig, version string) (*Server, error) {
 	// Core endpoints
 	mux.HandleFunc("/v1/health", s.handleHealth)
 	mux.HandleFunc("/v1/deploy", s.handleDeploy) // POST /v1/deploy
+	mux.HandleFunc("/v1/stats", s.handleStats)   // GET /v1/stats (Phase 3)
 
 	// Initialize MCP if TCP is enabled (MCP requires authenticated access)
 	if config.TCP.Enabled {

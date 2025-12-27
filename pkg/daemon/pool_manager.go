@@ -196,24 +196,70 @@ func (pm *PoolManager) workerLoop(agentPool *AgentPool) {
 			continue
 		}
 
-		// Execute via worker
-		start := time.Now()
-		result, execErr := worker.Execute(req.Context, req.Input)
-		duration := time.Since(start)
-
-		// Return worker to pool
-		agentPool.pool.ReturnWorker(worker)
-
-		// Send response
-		req.ResponseCh <- &scaling.Response{
-			Result:   result,
-			Error:    execErr,
-			Duration: duration,
+		// Check if streaming requested (Phase 3)
+		if req.StreamCh != nil {
+			// Streaming execution
+			pm.executeStreaming(req, worker, agentPool)
+		} else {
+			// Non-streaming execution
+			pm.executeNonStreaming(req, worker, agentPool)
 		}
-
-		// Mark request complete (for queue metrics)
-		agentPool.queue.Complete(req.ID)
 	}
+}
+
+// executeStreaming handles streaming execution via worker pool.
+func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Worker, agentPool *AgentPool) {
+	// Type-assert to DaemonWorker for streaming support
+	daemonWorker, ok := worker.(*DaemonWorker)
+	if !ok {
+		// Worker doesn't support streaming - fall back to non-streaming
+		pm.executeNonStreaming(req, worker, agentPool)
+		return
+	}
+
+	start := time.Now()
+
+	// Execute with streaming
+	result, err := daemonWorker.ExecuteStreaming(req.Context, req.Input, req.StreamCh)
+	duration := time.Since(start)
+
+	// Return worker to pool
+	agentPool.pool.ReturnWorker(worker)
+
+	// Send final response
+	req.ResponseCh <- &scaling.Response{
+		Result:   result,
+		Error:    err,
+		Duration: duration,
+	}
+
+	// Close stream channel (signals completion to handler)
+	if req.StreamCh != nil {
+		close(req.StreamCh)
+	}
+
+	// Mark request complete
+	agentPool.queue.Complete(req.ID)
+}
+
+// executeNonStreaming handles non-streaming execution via worker pool.
+func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.Worker, agentPool *AgentPool) {
+	start := time.Now()
+	result, err := worker.Execute(req.Context, req.Input)
+	duration := time.Since(start)
+
+	// Return worker to pool
+	agentPool.pool.ReturnWorker(worker)
+
+	// Send response
+	req.ResponseCh <- &scaling.Response{
+		Result:   result,
+		Error:    err,
+		Duration: duration,
+	}
+
+	// Mark request complete
+	agentPool.queue.Complete(req.ID)
 }
 
 // Shutdown gracefully shuts down all pools.
@@ -474,6 +520,89 @@ func (w *DaemonWorker) Execute(ctx context.Context, input []byte) (*scaling.Resu
 
 	// Execute using daemon's existing infrastructure
 	result, err := Execute(ctx, req)
+	if err != nil {
+		// Track failure
+		w.trackFailure()
+		return nil, err
+	}
+
+	// Check result status
+	if result.Status == "error" || result.Status == "timeout" {
+		w.trackFailure()
+	} else {
+		// Success - reset failure counter
+		w.consecutiveFailures.Store(0)
+		w.health.Store(int32(scaling.HealthHealthy))
+	}
+
+	// Convert proxy.Result → scaling.Result
+	scalingResult := &scaling.Result{
+		Status:   string(result.Status),
+		Output:   result.Output,
+		Error:    result.Error,
+		Stderr:   result.Stderr,
+		ExitCode: result.ExitCode,
+		Duration: result.Duration,
+	}
+
+	return scalingResult, nil
+}
+
+// ExecuteStreaming runs a task via daemon's ExecuteStreaming() with SSE support.
+// This method enables pool-based SSE streaming by bridging the channel-based
+// worker pool communication with runtime.StreamWriter.
+func (w *DaemonWorker) ExecuteStreaming(ctx context.Context, input []byte, streamCh chan *scaling.StreamEvent) (*scaling.Result, error) {
+	w.mu.Lock()
+	if w.shutdown {
+		w.mu.Unlock()
+		return nil, fmt.Errorf("worker %s is shut down", w.id)
+	}
+	w.mu.Unlock()
+
+	// Mark as busy
+	w.idle.Store(false)
+	defer func() {
+		w.idle.Store(true)
+		w.lastUsed.Store(time.Now().UnixNano())
+	}()
+
+	// Parse input JSON to map
+	var inputMap map[string]interface{}
+	if len(input) > 0 {
+		if err := json.Unmarshal(input, &inputMap); err != nil {
+			return nil, fmt.Errorf("invalid input JSON: %w", err)
+		}
+	} else {
+		inputMap = make(map[string]interface{})
+	}
+
+	// Build environment variables map
+	envMap := make(map[string]string)
+	for _, envStr := range w.resolvedEnv {
+		if idx := len(envStr); idx > 0 {
+			for i := 0; i < len(envStr); i++ {
+				if envStr[i] == '=' {
+					key := envStr[:i]
+					value := envStr[i+1:]
+					envMap[key] = value
+					break
+				}
+			}
+		}
+	}
+
+	// Build RunRequest for daemon's ExecuteStreaming()
+	req := &RunRequest{
+		AgentPath: w.agentPath,
+		Input:     inputMap,
+		Env:       envMap,
+	}
+
+	// Create stream adapter: runtime.StreamWriter → chan *scaling.StreamEvent
+	streamWriter := newChannelStreamWriter(streamCh)
+
+	// Execute using daemon's ExecuteStreaming infrastructure
+	result, err := ExecuteStreaming(ctx, req, streamWriter)
 	if err != nil {
 		// Track failure
 		w.trackFailure()

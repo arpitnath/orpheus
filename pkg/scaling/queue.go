@@ -21,6 +21,7 @@ type Request struct {
 	Input      []byte
 	Context    context.Context
 	ResponseCh chan *Response
+	StreamCh   chan *StreamEvent // Optional: for SSE streaming (nil for non-streaming requests)
 	QueuedAt   time.Time
 	StartedAt  *time.Time
 }
@@ -30,6 +31,13 @@ type Response struct {
 	Result   *Result
 	Error    error
 	Duration time.Duration
+}
+
+// StreamEvent represents a real-time event during agent execution (for SSE).
+type StreamEvent struct {
+	Type      string                 `json:"type"`      // "init", "chunk", "progress", "error", "completed"
+	Timestamp time.Time              `json:"timestamp"`
+	Data      map[string]interface{} `json:"data"`
 }
 
 // RequestQueue implements QueueMetrics and manages request flow.
