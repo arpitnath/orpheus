@@ -178,6 +178,18 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Create autoscaling pool for agent (NEW - Phase 2)
+	if s.poolManager != nil {
+		poolErr := s.poolManager.CreatePool(agentName)
+		if poolErr != nil {
+			log.Printf("Warning: Failed to create pool for '%s': %v", agentName, poolErr)
+			log.Printf("Agent will fall back to direct execution mode")
+			// Continue - agent can still work without pool (fallback to direct execution)
+		} else {
+			log.Printf("Created autoscaling pool for agent '%s'", agentName)
+		}
+	}
+
 	// Build endpoint URLs (NEW RESTful format)
 	serverDomain := r.Host // Use request host for now
 	endpoints := map[string]string{

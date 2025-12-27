@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"agentscale/pkg/registry"
 	"agentscale/pkg/runtime"
+	"agentscale/pkg/scaling"
 	"github.com/google/uuid"
 )
 
@@ -64,7 +66,6 @@ func (s *Server) handleAgentResource(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRunByName(w http.ResponseWriter, r *http.Request, agentName string) {
 	// Get agent from registry
 	agent, err := s.registry.Get(agentName)
-	_ = agent // Use agent variable
 	if err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("agent not found: %s", agentName))
 		return
@@ -76,6 +77,88 @@ func (s *Server) handleRunByName(w http.ResponseWriter, r *http.Request, agentNa
 		return
 	}
 
+	// NEW Phase 2: Try pool-based execution first
+	if s.poolManager != nil {
+		pool, poolErr := s.poolManager.GetPool(agentName)
+		if poolErr == nil {
+			// Pool exists - use pool-based execution
+			s.executeViaPool(w, r, agentName, pool)
+			return
+		}
+
+		// Pool doesn't exist - try lazy creation
+		if createErr := s.poolManager.CreatePool(agentName); createErr == nil {
+			// Pool created successfully, retry
+			if pool, _ := s.poolManager.GetPool(agentName); pool != nil {
+				s.executeViaPool(w, r, agentName, pool)
+				return
+			}
+		}
+
+		// Pool creation failed - log and fall back to direct execution
+		log.Printf("[handler] Pool unavailable for '%s', using direct execution", agentName)
+	}
+
+	// FALLBACK: Direct execution (existing behavior)
+	s.executeDirectly(w, r, agent)
+}
+
+// executeViaPool executes an agent request via worker pool (autoscaled).
+func (s *Server) executeViaPool(w http.ResponseWriter, r *http.Request, agentName string, pool *AgentPool) {
+	// Parse request
+	var req struct {
+		Input json.RawMessage   `json:"input"`
+		Env   map[string]string `json:"env,omitempty"` // Runtime overrides
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
+		return
+	}
+
+	// Create scaling request
+	scalingReq := &scaling.Request{
+		ID:         uuid.New().String(),
+		Input:      req.Input,
+		Context:    r.Context(),
+		ResponseCh: make(chan *scaling.Response, 1),
+	}
+
+	// Enqueue to agent's queue
+	if err := pool.queue.Enqueue(r.Context(), scalingReq); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "agent queue full")
+		return
+	}
+
+	// Wait for worker to process
+	select {
+	case resp := <-scalingReq.ResponseCh:
+		if resp.Error != nil {
+			writeJSON(w, http.StatusOK, RunResponse{
+				Status:     "error",
+				Error:      resp.Error.Error(),
+				DurationMs: resp.Duration.Milliseconds(),
+			})
+			return
+		}
+
+		// Success - convert scaling.Result to RunResponse
+		writeJSON(w, http.StatusOK, RunResponse{
+			Status:     resp.Result.Status,
+			Output:     resp.Result.Output,
+			RawOutput:  fmt.Sprintf("%v", resp.Result.Output), // Best effort string conversion
+			Error:      resp.Result.Error,
+			Stderr:     resp.Result.Stderr,
+			DurationMs: resp.Duration.Milliseconds(),
+		})
+
+	case <-r.Context().Done():
+		writeError(w, http.StatusRequestTimeout, "request timeout")
+	}
+}
+
+// executeDirectly executes an agent directly without worker pool (fallback).
+func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *registry.RegisteredAgent) {
 	// Parse request (simplified - no agent_path needed!)
 	var req struct {
 		Input json.RawMessage   `json:"input"`
@@ -308,6 +391,15 @@ func (s *Server) handleGetAgentByName(w http.ResponseWriter, agentName string) {
 // handleDeleteAgentByName unregisters an agent.
 // DELETE /v1/agents/{name}
 func (s *Server) handleDeleteAgentByName(w http.ResponseWriter, agentName string) {
+	// NEW Phase 2: Remove pool first (before registry)
+	if s.poolManager != nil {
+		if poolErr := s.poolManager.RemovePool(agentName); poolErr != nil {
+			log.Printf("[handler] Failed to remove pool for '%s': %v", agentName, poolErr)
+			// Continue - pool might not exist (agent deployed before Phase 2)
+		}
+	}
+
+	// Delete from registry
 	if err := s.registry.Delete(agentName); err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("agent not found: %s", agentName))
 		return
