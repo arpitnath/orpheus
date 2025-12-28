@@ -9,7 +9,7 @@ import re
 import typer
 
 from agentscale.utils.output import print_error, print_info, print_success
-from agentscale.utils.builder import build_agent_image, DeployError
+from agentscale.utils.builder import build_agent_image, DeployError, finalize_agent_image, cleanup_temp_build
 from agentscale.utils.archive import create_tar, calculate_checksum, get_tar_size_mb
 from agentscale.utils.client import get_client
 from agentscale.config import get_active_server
@@ -115,42 +115,87 @@ def deploy(
         print("")
 
     # Build agent image
+    build_result = None  # Track for cleanup
     try:
-        result = build_agent_image(
-            agent_path=str(agent_dir.absolute()),
-            force=force,
-            no_cache=no_cache,
-            config_path=config,
-            verbose=verbose,
-            quiet=quiet
-        )
-
         if remote:
-            # Remote deployment
-            deploy_remote(result, verbose=verbose, quiet=quiet, json_output=json_output)
+            # Remote mode: Build in temporary location
+            if verbose:
+                print_info("Building agent image (temporary)...")
+
+            build_result = build_agent_image(
+                agent_path=str(agent_dir.absolute()),
+                force=force,
+                no_cache=no_cache,
+                config_path=False,  # Don't update config yet (will do after finalization)
+                verbose=verbose,
+                quiet=quiet,
+                temp=True  # Build in temp location
+            )
+
+            # Deploy to remote server
+            deploy_remote(build_result, force=force, verbose=verbose, quiet=quiet, json_output=json_output)
+
+            # Remote deployment succeeded - finalize local state
+            if verbose:
+                print_info("Finalizing local state...")
+
+            final_path = finalize_agent_image(
+                build_result['image_path'],
+                build_result['agent_name'],
+                force=force,
+                verbose=verbose
+            )
+
+            # Update config to point to final location
+            if config is not False:
+                from agentscale.utils.config_updater import update_agentscale_yaml
+                update_agentscale_yaml(
+                    build_result['agent_config'],
+                    Path(final_path),
+                    config,
+                    verbose=verbose
+                )
+
         else:
-            # Local deployment (existing behavior)
+            # Local mode: Build directly in final location (existing behavior)
+            build_result = build_agent_image(
+                agent_path=str(agent_dir.absolute()),
+                force=force,
+                no_cache=no_cache,
+                config_path=config,
+                verbose=verbose,
+                quiet=quiet,
+                temp=False  # Build in final location
+            )
+
+            # Local deployment output
             print("")
             print_success("Agent deployed locally!")
             print("")
-            print(f"  Agent:   {result['agent_name']}")
-            print(f"  Image:   {result['image_path']}")
-            print(f"  Size:    {result['size_mb']}MB")
-            print(f"  Runtime: {result['runtime']}")
+            print(f"  Agent:   {build_result['agent_name']}")
+            print(f"  Image:   {build_result['image_path']}")
+            print(f"  Size:    {build_result['size_mb']}MB")
+            print(f"  Runtime: {build_result['runtime']}")
             print("")
             print("Ready to run:")
-            print(f"  echo '{{\"query\": \"test\"}}' | agentscale run {result['agent_name']}")
+            print(f"  echo '{{\"query\": \"test\"}}' | agentscale run {build_result['agent_name']}")
             print("")
 
     except DeployError as e:
+        # Cleanup temporary build on failure
+        if build_result and build_result.get('is_temp') and 'image_path' in build_result:
+            cleanup_temp_build(build_result['image_path'], verbose=verbose)
         print_error("Deployment failed", str(e))
         raise typer.Exit(1)
     except Exception as e:
+        # Cleanup temporary build on unexpected errors
+        if build_result and build_result.get('is_temp') and 'image_path' in build_result:
+            cleanup_temp_build(build_result['image_path'], verbose=verbose)
         print_error("Unexpected error during deployment", str(e))
         raise typer.Exit(1)
 
 
-def deploy_remote(build_result: dict, verbose: bool = False, quiet: bool = False, json_output: bool = False) -> None:
+def deploy_remote(build_result: dict, force: bool = False, verbose: bool = False, quiet: bool = False, json_output: bool = False) -> None:
     """Deploy agent to remote server.
 
     Args:
@@ -183,7 +228,8 @@ def deploy_remote(build_result: dict, verbose: bool = False, quiet: bool = False
     if verbose:
         print_info("Creating archive...")
     image_path = Path(build_result['image_path'])
-    tar_file = create_tar(image_path)
+    # Use agent name as arcname (not directory name which might have UUID suffix for temp builds)
+    tar_file = create_tar(image_path, arcname=build_result['agent_name'])
     tar_size_mb = get_tar_size_mb(tar_file)
     if verbose:
         print_info(f"Archive created: {tar_file.name} ({tar_size_mb} MB)")
@@ -218,7 +264,15 @@ def deploy_remote(build_result: dict, verbose: bool = False, quiet: bool = False
             if response.status_code != 200:
                 error_response = response.json()
                 error_msg = error_response.get('error', f"HTTP {response.status_code}")
-                print_error("Deployment failed", error_msg)
+
+                # Provide helpful message for conflict errors
+                if response.status_code == 409:  # Conflict
+                    print_error(
+                        "Agent already exists on server",
+                        f"{error_msg}\n\nTo replace it, use:\n  agentscale undeploy {build_result['agent_name']}\n  Then retry deployment"
+                    )
+                else:
+                    print_error("Deployment failed", error_msg)
                 raise typer.Exit(1)
 
             # Parse success response

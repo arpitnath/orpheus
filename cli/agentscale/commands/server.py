@@ -100,32 +100,80 @@ def start(
 
     print_success("Auth database directory ready")
 
-    # Step 3: Start daemon in TCP mode
+    # Step 3: Start daemon in TCP mode (FIXED: proper shell nesting for redirection)
     print_info(f"Starting daemon on TCP port {port}...")
-    cmd = f"sudo /usr/local/bin/agentscale-daemon --tcp-bind :{port} > /tmp/daemon.log 2>&1 &"
-    subprocess.run(
-        ["limactl", "shell", "agentscale", "bash", "-c", cmd],
-        check=True,
-        timeout=SERVER_COMMAND_TIMEOUT,
-    )
-    time.sleep(3)
-    print_success(f"Daemon started on port {port}")
-
-    # Step 4: Check daemon logs
+    cmd = f"/usr/local/bin/agentscale-daemon --tcp-bind :{port} > /var/log/agentscale-daemon.log 2>&1 & echo $!"
     result = subprocess.run(
-        ["limactl", "shell", "agentscale", "tail", "-10", "/tmp/daemon.log"],
+        ["limactl", "shell", "agentscale", "sudo", "bash", "-c", cmd],
         capture_output=True,
         text=True,
         timeout=SERVER_COMMAND_TIMEOUT,
     )
 
-    if "MCP endpoints enabled" in result.stdout and "Listening on TCP" in result.stdout:
-        print_success("TCP server and MCP endpoints active")
+    if result.returncode != 0:
+        print_error("Failed to start daemon")
+        if result.stderr:
+            print(result.stderr)
+        raise typer.Exit(1)
+
+    daemon_pid = result.stdout.strip()
+    print_success(f"Daemon started (PID: {daemon_pid})")
+
+    # Step 4: Wait for daemon health via Unix socket (NO AUTH required)
+    print_info("Waiting for daemon to become healthy...")
+
+    deadline = time.time() + 30  # 30 second timeout
+    attempt = 0
+    last_error = None
+
+    while time.time() < deadline:
+        attempt += 1
+        try:
+            # Check health via Unix socket (doesn't require auth, but needs sudo for socket access)
+            health_check = subprocess.run(
+                ["limactl", "shell", "agentscale", "--",
+                 "sudo", "curl", "-s", "--unix-socket", "/var/run/agentscale.sock",
+                 "http://localhost/v1/health"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if health_check.returncode == 0 and health_check.stdout:
+                import json
+                try:
+                    health_data = json.loads(health_check.stdout)
+                    if health_data.get("status") == "healthy":
+                        print_success(f"Daemon is healthy (verified in {attempt} attempts)")
+
+                        # Also check logs for debugging (non-fatal if missing)
+                        log_check = subprocess.run(
+                            ["limactl", "shell", "agentscale", "sudo", "tail", "-5", "/var/log/agentscale-daemon.log"],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        if "MCP endpoints enabled" in log_check.stdout and "Listening on TCP" in log_check.stdout:
+                            print_success("TCP server and MCP endpoints confirmed in logs")
+
+                        break
+                except json.JSONDecodeError:
+                    last_error = f"Invalid JSON response: {health_check.stdout}"
+            else:
+                last_error = f"Health check failed: {health_check.stderr or 'empty response'}"
+        except subprocess.TimeoutExpired:
+            last_error = "Health check timeout"
+        except Exception as e:
+            last_error = str(e)
+
+        time.sleep(0.5)  # Poll every 500ms
     else:
-        print_error("Daemon may not have started correctly")
+        # Timeout reached without success
+        print_error(f"Daemon did not become healthy within 30s ({attempt} attempts)")
+        print_error(f"Last error: {last_error}")
         print("")
-        print("Daemon logs:")
-        print(result.stdout)
+        print("Check daemon logs:")
+        print(f"  limactl shell agentscale sudo tail -20 /var/log/agentscale-daemon.log")
         raise typer.Exit(1)
 
     # Step 5: List or create API keys

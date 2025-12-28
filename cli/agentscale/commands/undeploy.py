@@ -5,8 +5,11 @@ import shutil
 from pathlib import Path
 import typer
 import yaml
+import httpx
 
 from agentscale.utils.output import print_error, print_info, print_success, print_warning
+from agentscale.config import get_active_server, load_config
+from agentscale.utils.client import get_client
 
 
 def undeploy(
@@ -15,44 +18,49 @@ def undeploy(
 ) -> None:
     """Remove a deployed agent.
 
-    Deletes the agent directory and updates agentscale.yaml configuration.
-    Shows disk space freed after removal.
+    Removes agent from active server (local or remote based on config).
+    Also deletes local state and updates configuration.
 
     Examples:
         agentscale undeploy calculator-agent
         agentscale undeploy calculator-agent --force
     """
+    # Detect server mode
+    server_config = get_active_server()
+    mode = server_config.get("mode", "unix_socket")
+    is_remote = (mode == "tcp")
+
+    # Get server name for messaging
+    config = load_config()
+    active_server_name = config.get("active", "local")
+
     # Find agent directory
     agents_dir = Path.home() / ".agentscale" / "agents"
     agent_dir = agents_dir / agent_name
 
-    if not agent_dir.exists():
-        print_error(
-            f"Agent '{agent_name}' not found",
-            "List deployed agents with: agentscale list"
-        )
-        raise typer.Exit(1)
+    # Get agent size if local state exists
+    size_mb = 0
+    if agent_dir.exists():
+        try:
+            manifest_file = agent_dir / "manifest.json"
+            if manifest_file.exists():
+                manifest = json.loads(manifest_file.read_text())
+                size_mb = manifest["image"]["size_mb"]
+            else:
+                size_mb = calculate_directory_size(agent_dir)
+        except Exception:
+            size_mb = 0
 
-    # Get agent size
-    try:
-        manifest_file = agent_dir / "manifest.json"
-        if manifest_file.exists():
-            manifest = json.loads(manifest_file.read_text())
-            size_mb = manifest["image"]["size_mb"]
-        else:
-            # Calculate size if no manifest
-            size_mb = calculate_directory_size(agent_dir)
-    except Exception:
-        size_mb = 0
-
-    size_display = format_size(size_mb)
+    size_display = format_size(size_mb) if size_mb > 0 else "unknown"
 
     # Confirm deletion
     if not force:
-        print_warning(
-            f"This will remove agent '{agent_name}' ({size_display})",
-            "This action cannot be undone"
-        )
+        location = f"server '{active_server_name}'" if is_remote else "locally"
+        message = f"This will undeploy agent '{agent_name}' from {location}"
+        if size_mb > 0:
+            message += f" ({size_display})"
+
+        print_warning(message, "This action cannot be undone")
         print("")
 
         confirm = typer.confirm("Continue?", default=False)
@@ -60,15 +68,38 @@ def undeploy(
             print_info("Cancelled")
             raise typer.Exit(0)
 
-    print_info(f"Removing agent '{agent_name}'...")
+    # Message
+    if is_remote:
+        print_info(f"Undeploying agent '{agent_name}' from {active_server_name}...")
+    else:
+        print_info(f"Removing agent '{agent_name}'...")
 
-    # Remove agent directory
-    try:
-        shutil.rmtree(agent_dir)
-        print_success(f"✓ Agent directory removed")
-    except Exception as e:
-        print_error("Failed to remove agent directory", str(e))
-        raise typer.Exit(1)
+    print("")
+
+    # Remote cleanup first (if applicable)
+    remote_success = True
+    if is_remote:
+        remote_success = undeploy_from_remote(agent_name)
+        if not remote_success and not force:
+            raise typer.Exit(1)
+
+    # Local cleanup (always do this - handles orphaned local state)
+    if agent_dir.exists():
+        try:
+            shutil.rmtree(agent_dir)
+            print_success("✓ Agent directory removed")
+        except Exception as e:
+            print_error("Failed to remove agent directory", str(e))
+            raise typer.Exit(1)
+    else:
+        if not is_remote:
+            # Local mode and no local state - this is an error
+            print_error(
+                f"Agent '{agent_name}' not found",
+                "List deployed agents with: agentscale list"
+            )
+            raise typer.Exit(1)
+        # Remote mode with no local state is OK (was deployed remotely only)
 
     # Update agentscale.yaml
     try:
@@ -78,8 +109,59 @@ def undeploy(
         print_warning("Failed to update agentscale.yaml", str(e))
 
     print("")
-    print(f"Freed: {size_display}")
+    if size_mb > 0:
+        print(f"Freed: {size_display}")
+
+    # Warn if remote cleanup failed
+    if is_remote and not remote_success:
+        print("")
+        print_warning(
+            "Remote cleanup incomplete",
+            f"Agent may still exist on server '{active_server_name}'"
+        )
+
     print("")
+
+
+def undeploy_from_remote(agent_name: str) -> bool:
+    """Undeploy agent from remote server.
+
+    Args:
+        agent_name: Agent to undeploy
+
+    Returns:
+        True if successful or agent not found (idempotent), False on error
+    """
+    try:
+        client = get_client(timeout=30)
+        response = client.delete(f'/v1/agents/{agent_name}')
+
+        if response.status_code == 200:
+            print_success("✓ Removed from server (registry + pool)")
+            return True
+        elif response.status_code == 404:
+            print_warning(
+                f"Agent '{agent_name}' not found on server",
+                "It may have been already undeployed"
+            )
+            return True  # Not an error - idempotent
+        else:
+            error_response = response.json()
+            error_msg = error_response.get('error', f"HTTP {response.status_code}")
+            print_error(f"Failed to undeploy from server: {error_msg}")
+            return False
+
+    except httpx.ConnectError:
+        server_config = get_active_server()
+        server_url = server_config.get("url", "unknown")
+        print_warning(
+            f"Cannot connect to server: {server_url}",
+            "Local state will still be removed"
+        )
+        return True  # Continue with local cleanup
+    except Exception as e:
+        print_error(f"Server request failed: {str(e)}")
+        return False
 
 
 def remove_from_config(agent_name: str) -> None:

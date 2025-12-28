@@ -3,6 +3,8 @@ package scaling
 import "time"
 
 // TierScalingConfig holds the default scaling configuration for a pricing tier.
+// NOTE: Tier system is for CLOUD/MULTI-TENANT use only (org-specific SLAs).
+// OSS uses one sensible default policy (see daemon/pool_manager.go getDefaultPolicy).
 // Each tier (free, pro, teams) has different limits and scaling behavior.
 type TierScalingConfig struct {
 	// MinWorkers is the minimum number of workers to maintain.
@@ -37,6 +39,10 @@ type TierScalingConfig struct {
 }
 
 // DefaultTierConfigs maps tier names to their default configurations.
+// NOTE: This is for CLOUD/INTERNAL use only (org-specific tier management).
+// OSS users don't select tiers - they get one sensible default or customize explicitly.
+// Cloud can use this for org-specific SLAs (e.g., org A defines "prod-critical" tier).
+//
 // These values represent the SLA differences between pricing tiers:
 // - free: Limited resources, slower scaling (cost optimization)
 // - pro: Balanced resources, moderate scaling (typical use)

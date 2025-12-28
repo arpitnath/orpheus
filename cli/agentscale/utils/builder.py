@@ -142,12 +142,13 @@ def find_base_image(runtime: str, version: str) -> Path:
 # Agent Image Directory
 # ============================================================================
 
-def create_agent_image_dir(agent_name: str, force: bool = False) -> Path:
+def create_agent_image_dir(agent_name: str, force: bool = False, temp: bool = False) -> Path:
     """Create directory structure for agent image.
 
     Args:
         agent_name: Name of the agent
         force: If True, overwrite existing deployment
+        temp: If True, create in temporary location (for remote builds)
 
     Returns:
         Path to agent image directory
@@ -155,6 +156,19 @@ def create_agent_image_dir(agent_name: str, force: bool = False) -> Path:
     Raises:
         BuildError: If agent already deployed and force=False
     """
+    if temp:
+        # Remote build: use temporary directory
+        import tempfile
+        import uuid
+        temp_base = Path(tempfile.gettempdir()) / ".agentscale-build"
+        temp_base.mkdir(parents=True, exist_ok=True)
+        temp_dir = temp_base / f"{agent_name}-{uuid.uuid4().hex[:8]}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        (temp_dir / "packages").mkdir(exist_ok=True)
+        (temp_dir / "agent").mkdir(exist_ok=True)
+        return temp_dir
+
+    # Local build: use final location
     agents_dir = Path.home() / ".agentscale" / "agents"
     agent_dir = agents_dir / agent_name
 
@@ -210,7 +224,8 @@ def build_agent_image(
     no_cache: bool = False,
     config_path: Optional[str] = None,
     verbose: bool = False,
-    quiet: bool = False
+    quiet: bool = False,
+    temp: bool = False
 ) -> Dict[str, Any]:
     """Build complete agent image with runtime, dependencies, and code.
 
@@ -219,6 +234,7 @@ def build_agent_image(
         force: Overwrite existing deployment
         no_cache: Don't use pip cache
         config_path: Path to agentscale.yaml
+        temp: Build in temporary location (for remote deployments)
 
     Returns:
         Dictionary with deployment result info
@@ -247,9 +263,10 @@ def build_agent_image(
     # Step 3: Create agent image directory
     if verbose:
         print("[deploy] Creating agent image structure...")
-    agent_image_dir = create_agent_image_dir(agent_config["name"], force=force)
+    agent_image_dir = create_agent_image_dir(agent_config["name"], force=force, temp=temp)
     if verbose:
-        print(f"[deploy] ✓ Created: {agent_image_dir}")
+        location = "temporary location" if temp else str(agent_image_dir)
+        print(f"[deploy] ✓ Created: {location}")
         print("")
 
     # Remaining steps will be implemented in subsequent tasks
@@ -310,11 +327,11 @@ def build_agent_image(
         print(f"[deploy] ✓ Manifest created")
         print("")
 
-    # Step 8: Update agentscale.yaml
+    # Step 8: Update agentscale.yaml (skip for temp builds - will update after finalization)
     if not config_path and not os.path.exists("agentscale.yaml"):
         config_path = None  # Will handle in config_updater
 
-    if config_path is not False:  # Allow skipping with --skip-config
+    if not temp and config_path is not False:  # Skip config update for temp builds
         if verbose:
             print("[deploy] Updating agentscale.yaml...")
         from agentscale.utils.config_updater import update_agentscale_yaml
@@ -329,8 +346,77 @@ def build_agent_image(
         "image_path": str(agent_image_dir),
         "size_mb": size_mb,
         "runtime": f"{agent_config['runtime']}-{agent_config['runtime_version']}",
-        "agent_config": agent_config  # Include for env resolution
+        "agent_config": agent_config,  # Include for env resolution
+        "is_temp": temp  # Track if this is a temporary build
     }
+
+
+def finalize_agent_image(temp_image_path: str, agent_name: str, force: bool = False, verbose: bool = False) -> str:
+    """Move temporary build to final location.
+
+    Called after successful remote deployment to finalize the local state.
+
+    Args:
+        temp_image_path: Path to temporary build directory
+        agent_name: Agent name
+        force: Overwrite existing deployment
+        verbose: Show progress
+
+    Returns:
+        Path to final agent directory
+
+    Raises:
+        DeployError: If finalization fails
+    """
+    temp_path = Path(temp_image_path)
+    if not temp_path.exists():
+        raise DeployError(f"Temporary build not found: {temp_image_path}")
+
+    # Determine final location
+    agents_dir = Path.home() / ".agentscale" / "agents"
+    final_path = agents_dir / agent_name
+
+    # Check if final location already exists
+    if final_path.exists():
+        if not force:
+            raise DeployError(
+                f"Agent '{agent_name}' already deployed at {final_path}\n"
+                f"Use --force to overwrite"
+            )
+        if verbose:
+            print(f"[deploy] Removing existing deployment at {final_path}")
+        shutil.rmtree(final_path)
+
+    # Ensure parent directory exists
+    agents_dir.mkdir(parents=True, exist_ok=True)
+
+    # Move temp to final location
+    try:
+        shutil.move(str(temp_path), str(final_path))
+        if verbose:
+            print(f"[deploy] ✓ Finalized to {final_path}")
+        return str(final_path)
+    except Exception as e:
+        raise DeployError(f"Failed to finalize deployment: {e}")
+
+
+def cleanup_temp_build(temp_image_path: str, verbose: bool = False) -> None:
+    """Clean up temporary build directory.
+
+    Args:
+        temp_image_path: Path to temporary build directory
+        verbose: Show progress
+    """
+    temp_path = Path(temp_image_path)
+    if temp_path.exists() and ".agentscale-build" in str(temp_path):
+        try:
+            shutil.rmtree(temp_path)
+            if verbose:
+                print(f"[deploy] Cleaned up temporary build")
+        except Exception as e:
+            # Don't fail if cleanup fails - just log it
+            if verbose:
+                print(f"[deploy] Warning: Failed to cleanup temp: {e}")
 
 
 # ============================================================================

@@ -5,8 +5,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict
 import typer
+import httpx
 
 from agentscale.utils.output import print_error, print_info
+from agentscale.config import get_active_server, load_config
+from agentscale.utils.client import get_client
 
 
 def list_agents(
@@ -24,11 +27,18 @@ def list_agents(
     if images:
         show_base_images()
     else:
-        show_deployed_agents()
+        # Detect mode and route accordingly
+        server_config = get_active_server()
+        mode = server_config.get("mode", "unix_socket")
+
+        if mode == "tcp":
+            show_remote_agents(server_config)
+        else:
+            show_local_agents()
 
 
-def show_deployed_agents() -> None:
-    """Display deployed agents in a table."""
+def show_local_agents() -> None:
+    """Display locally deployed agents."""
     agents_dir = Path.home() / ".agentscale" / "agents"
 
     if not agents_dir.exists():
@@ -60,8 +70,12 @@ def show_deployed_agents() -> None:
     # Sort by name
     agents.sort(key=lambda x: x["name"])
 
-    # Print header
+    # Print source header
     print("")
+    print("Source: Local")
+    print("")
+
+    # Print header
     print(f"{'NAME':<20} {'RUNTIME':<15} {'SIZE':<10} {'DEPLOYED':<20}")
     print("-" * 70)
 
@@ -77,6 +91,80 @@ def show_deployed_agents() -> None:
     print("")
     print(f"Total: {len(agents)} agent(s)")
     print("")
+
+
+def show_remote_agents(server_config: Dict) -> None:
+    """Display agents from remote server."""
+    # Get active server name
+    config = load_config()
+    active_server_name = config.get("active", "unknown")
+    server_url = server_config.get("url", "unknown")
+
+    try:
+        client = get_client(timeout=10)
+        response = client.get('/v1/agents')
+
+        if response.status_code != 200:
+            print_error(
+                f"Failed to list agents from server",
+                f"HTTP {response.status_code}"
+            )
+            raise typer.Exit(1)
+
+        data = response.json()
+        remote_agents = data.get("agents", [])
+
+        if not remote_agents:
+            print_info("No agents deployed yet")
+            print("")
+            print("Deploy an agent with:")
+            print("  agentscale deploy <agent-path> --remote")
+            return
+
+        # Transform API data to display format
+        agents = []
+        for agent_data in remote_agents:
+            agents.append({
+                "name": agent_data.get("name", "unknown"),
+                "runtime": "N/A",  # Not provided by API
+                "size_mb": 0,  # Not provided by API
+                "created": agent_data.get("created_at", datetime.now().isoformat()),
+            })
+
+        # Sort by name
+        agents.sort(key=lambda x: x["name"])
+
+        # Print source header
+        print("")
+        print(f"Source: Remote ({active_server_name}: {server_url})")
+        print("")
+
+        # Print header
+        print(f"{'NAME':<20} {'RUNTIME':<15} {'SIZE':<10} {'DEPLOYED':<20}")
+        print("-" * 70)
+
+        # Print agents
+        for agent in agents:
+            name = agent["name"][:19]
+            runtime = "N/A"  # API doesn't provide runtime info
+            size = "N/A"  # API doesn't provide size info
+            deployed = format_time_ago(agent["created"])
+
+            print(f"{name:<20} {runtime:<15} {size:<10} {deployed:<20}")
+
+        print("")
+        print(f"Total: {len(agents)} agent(s)")
+        print("")
+
+    except httpx.ConnectError:
+        print_error(
+            f"Cannot connect to server: {server_url}",
+            "Check that server is running and URL is correct"
+        )
+        raise typer.Exit(1)
+    except Exception as e:
+        print_error("Failed to list agents", str(e))
+        raise typer.Exit(1)
 
 
 def show_base_images() -> None:

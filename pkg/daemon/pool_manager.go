@@ -286,17 +286,24 @@ func (pm *PoolManager) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// OSS safety limits (prevent resource exhaustion on self-hosted)
+const (
+	MaxMinWorkers = 50   // Maximum min_workers value
+	MaxMaxWorkers = 100  // Maximum max_workers value
+	MaxQueueSize  = 1000 // Maximum queue_size value
+	MinQueueSize  = 1    // Minimum queue_size value
+)
+
 // loadScalingConfig loads scaling configuration from agent.yaml or returns defaults.
+// OSS uses one sensible default. Cloud can override with org-specific tiers.
 func (pm *PoolManager) loadScalingConfig(agentPath string) (scaling.ScalingPolicy, int) {
-	// Try to load agent.yaml
+	// Try to load explicit scaling config from agent.yaml
 	agentYAML := filepath.Join(agentPath, "agent.yaml")
 	if _, err := os.Stat(agentYAML); err == nil {
-		// Parse agent.yaml
 		data, readErr := os.ReadFile(agentYAML)
 		if readErr == nil {
 			var agentCfg struct {
 				Scaling struct {
-					Tier               string  `yaml:"tier"`
 					MinWorkers         int     `yaml:"min_workers"`
 					MaxWorkers         int     `yaml:"max_workers"`
 					TargetUtilization  float64 `yaml:"target_utilization"`
@@ -310,73 +317,176 @@ func (pm *PoolManager) loadScalingConfig(agentPath string) (scaling.ScalingPolic
 			}
 
 			if yamlErr := yaml.Unmarshal(data, &agentCfg); yamlErr == nil {
-				// If tier specified, use tier defaults as base
-				var policy scaling.ScalingPolicy
-				queueSize := 10 // Default
+				// Check if any explicit config provided
+				hasExplicitConfig := agentCfg.Scaling.MinWorkers > 0 ||
+					agentCfg.Scaling.MaxWorkers > 0 ||
+					agentCfg.Scaling.QueueSize > 0
 
-				if agentCfg.Scaling.Tier != "" {
-					policy = scaling.GetTierPolicy(agentCfg.Scaling.Tier)
-					tierCfg := scaling.GetTierConfig(agentCfg.Scaling.Tier)
-					queueSize = tierCfg.QueueSize
-				} else {
-					// No tier, use free tier as baseline
-					policy = scaling.GetTierPolicy("free")
-					tierCfg := scaling.GetTierConfig("free")
-					queueSize = tierCfg.QueueSize
-				}
+				if hasExplicitConfig {
+					// Build policy from explicit values + defaults for missing fields
+					policy, queueSize := pm.buildPolicyFromValues(
+						agentCfg.Scaling.MinWorkers,
+						agentCfg.Scaling.MaxWorkers,
+						agentCfg.Scaling.TargetUtilization,
+						agentCfg.Scaling.ScaleUpThreshold,
+						agentCfg.Scaling.ScaleDownThreshold,
+						agentCfg.Scaling.ScaleUpDelay,
+						agentCfg.Scaling.ScaleDownDelay,
+						agentCfg.Scaling.IdleTimeout,
+						agentCfg.Scaling.QueueSize,
+					)
 
-				// Apply explicit overrides
-				if agentCfg.Scaling.MinWorkers > 0 {
-					policy.MinWorkers = agentCfg.Scaling.MinWorkers
-				}
-				if agentCfg.Scaling.MaxWorkers > 0 {
-					policy.MaxWorkers = agentCfg.Scaling.MaxWorkers
-				}
-				if agentCfg.Scaling.TargetUtilization > 0 {
-					policy.TargetUtilization = agentCfg.Scaling.TargetUtilization
-				}
-				if agentCfg.Scaling.ScaleUpThreshold > 0 {
-					policy.ScaleUpThreshold = agentCfg.Scaling.ScaleUpThreshold
-				}
-				if agentCfg.Scaling.ScaleDownThreshold > 0 {
-					policy.ScaleDownThreshold = agentCfg.Scaling.ScaleDownThreshold
-				}
-				if agentCfg.Scaling.ScaleUpDelay != "" {
-					if d, err := time.ParseDuration(agentCfg.Scaling.ScaleUpDelay); err == nil {
-						policy.ScaleUpDelay = d
+					// Validate configuration
+					if err := validateScalingConfig(policy, queueSize); err != nil {
+						log.Printf("[pool-manager] Invalid scaling config in %s: %v", agentYAML, err)
+						log.Printf("[pool-manager] Using default policy instead")
+						return getDefaultPolicy()
 					}
-				}
-				if agentCfg.Scaling.ScaleDownDelay != "" {
-					if d, err := time.ParseDuration(agentCfg.Scaling.ScaleDownDelay); err == nil {
-						policy.ScaleDownDelay = d
-					}
-				}
-				if agentCfg.Scaling.IdleTimeout != "" {
-					if d, err := time.ParseDuration(agentCfg.Scaling.IdleTimeout); err == nil {
-						policy.IdleTimeout = d
-					}
-				}
-				if agentCfg.Scaling.QueueSize > 0 {
-					queueSize = agentCfg.Scaling.QueueSize
-				}
 
-				return policy, queueSize
+					log.Printf("[pool-manager] Using explicit scaling config for '%s' (min=%d, max=%d, queue=%d)",
+						filepath.Base(agentPath), policy.MinWorkers, policy.MaxWorkers, queueSize)
+					return policy, queueSize
+				}
 			}
 		}
 	}
 
-	// Fallback to tier defaults from environment or "free"
-	tier := os.Getenv("AGENTSCALE_DEFAULT_TIER")
-	if tier == "" {
-		tier = "free"
+	// No explicit config - use sensible defaults (OSS: one policy for everyone)
+	policy, queueSize := getDefaultPolicy()
+	log.Printf("[pool-manager] Using default policy for '%s' (min=%d, max=%d, queue=%d)",
+		filepath.Base(agentPath), policy.MinWorkers, policy.MaxWorkers, queueSize)
+	return policy, queueSize
+}
+
+// getDefaultPolicy returns the sensible default scaling policy for OSS.
+// This works for 90% of use cases. Power users can customize via agent.yaml.
+func getDefaultPolicy() (scaling.ScalingPolicy, int) {
+	return scaling.ScalingPolicy{
+		MinWorkers:         1,
+		MaxWorkers:         10,
+		TargetUtilization:  2.0,
+		ScaleUpThreshold:   3.0,
+		ScaleDownThreshold: 0.5,
+		ScaleUpDelay:       15 * time.Second,
+		ScaleDownDelay:     1 * time.Minute,
+		IdleTimeout:        10 * time.Minute,
+	}, 50 // queue_size
+}
+
+// buildPolicyFromValues builds a scaling policy from agent.yaml explicit values.
+// Missing fields use defaults from getDefaultPolicy().
+func (pm *PoolManager) buildPolicyFromValues(
+	minWorkers int,
+	maxWorkers int,
+	targetUtilization float64,
+	scaleUpThreshold float64,
+	scaleDownThreshold float64,
+	scaleUpDelay string,
+	scaleDownDelay string,
+	idleTimeout string,
+	queueSize int,
+) (scaling.ScalingPolicy, int) {
+	// Start with defaults
+	defaultPolicy, defaultQueueSize := getDefaultPolicy()
+	policy := defaultPolicy
+
+	// Override with explicit values
+	if minWorkers > 0 {
+		policy.MinWorkers = minWorkers
+	}
+	if maxWorkers > 0 {
+		policy.MaxWorkers = maxWorkers
+	}
+	if targetUtilization > 0 {
+		policy.TargetUtilization = targetUtilization
+	}
+	if scaleUpThreshold > 0 {
+		policy.ScaleUpThreshold = scaleUpThreshold
+	}
+	if scaleDownThreshold > 0 {
+		policy.ScaleDownThreshold = scaleDownThreshold
+	}
+	if scaleUpDelay != "" {
+		if d, err := time.ParseDuration(scaleUpDelay); err == nil {
+			policy.ScaleUpDelay = d
+		}
+	}
+	if scaleDownDelay != "" {
+		if d, err := time.ParseDuration(scaleDownDelay); err == nil {
+			policy.ScaleDownDelay = d
+		}
+	}
+	if idleTimeout != "" {
+		if d, err := time.ParseDuration(idleTimeout); err == nil {
+			policy.IdleTimeout = d
+		}
 	}
 
-	policy := scaling.GetTierPolicy(tier)
-	tierCfg := scaling.GetTierConfig(tier)
+	resultQueueSize := defaultQueueSize
+	if queueSize > 0 {
+		resultQueueSize = queueSize
+	}
 
-	log.Printf("[pool-manager] Using tier '%s' defaults for '%s' (no scaling config in agent.yaml)", tier, filepath.Base(agentPath))
+	return policy, resultQueueSize
+}
 
-	return policy, tierCfg.QueueSize
+// validateScalingConfig validates a scaling configuration against OSS safety limits.
+func validateScalingConfig(policy scaling.ScalingPolicy, queueSize int) error {
+	// Worker bounds
+	if policy.MinWorkers < 0 {
+		return fmt.Errorf("min_workers must be >= 0 (got %d)", policy.MinWorkers)
+	}
+	if policy.MaxWorkers < 1 {
+		return fmt.Errorf("max_workers must be >= 1 (got %d)", policy.MaxWorkers)
+	}
+	if policy.MinWorkers > policy.MaxWorkers {
+		return fmt.Errorf("min_workers (%d) cannot be > max_workers (%d)",
+			policy.MinWorkers, policy.MaxWorkers)
+	}
+
+	// OSS resource limits (prevent abuse on self-hosted)
+	if policy.MinWorkers > MaxMinWorkers {
+		return fmt.Errorf("min_workers exceeds OSS limit (%d > %d)", policy.MinWorkers, MaxMinWorkers)
+	}
+	if policy.MaxWorkers > MaxMaxWorkers {
+		return fmt.Errorf("max_workers exceeds OSS limit (%d > %d)", policy.MaxWorkers, MaxMaxWorkers)
+	}
+
+	// Queue bounds
+	if queueSize < MinQueueSize || queueSize > MaxQueueSize {
+		return fmt.Errorf("queue_size must be between %d and %d (got %d)",
+			MinQueueSize, MaxQueueSize, queueSize)
+	}
+
+	// Threshold logic validation
+	if policy.ScaleUpThreshold <= policy.ScaleDownThreshold {
+		return fmt.Errorf("scale_up_threshold (%.1f) must be > scale_down_threshold (%.1f)",
+			policy.ScaleUpThreshold, policy.ScaleDownThreshold)
+	}
+
+	// Threshold sanity (prevent constant scaling)
+	if policy.ScaleUpThreshold < 0.1 || policy.ScaleUpThreshold > 50.0 {
+		return fmt.Errorf("scale_up_threshold must be between 0.1 and 50.0 (got %.1f)", policy.ScaleUpThreshold)
+	}
+	if policy.ScaleDownThreshold < 0.0 || policy.ScaleDownThreshold > 10.0 {
+		return fmt.Errorf("scale_down_threshold must be between 0.0 and 10.0 (got %.1f)", policy.ScaleDownThreshold)
+	}
+
+	// Delay bounds
+	if policy.ScaleUpDelay < time.Second {
+		return fmt.Errorf("scale_up_delay must be >= 1s (got %v)", policy.ScaleUpDelay)
+	}
+	if policy.ScaleDownDelay < time.Second {
+		return fmt.Errorf("scale_down_delay must be >= 1s (got %v)", policy.ScaleDownDelay)
+	}
+	if policy.ScaleUpDelay > 10*time.Minute {
+		return fmt.Errorf("scale_up_delay must be <= 10m (got %v)", policy.ScaleUpDelay)
+	}
+	if policy.ScaleDownDelay > 30*time.Minute {
+		return fmt.Errorf("scale_down_delay must be <= 30m (got %v)", policy.ScaleDownDelay)
+	}
+
+	return nil
 }
 
 // DaemonWorkerSpawner creates workers that execute via daemon's Execute() function.

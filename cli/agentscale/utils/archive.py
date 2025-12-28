@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Optional
 
 
-def create_tar(directory: Path, output_path: Optional[Path] = None) -> Path:
+def create_tar(directory: Path, output_path: Optional[Path] = None, arcname: Optional[str] = None) -> Path:
     """Create tar.gz archive of directory.
 
     Args:
         directory: Directory to archive
         output_path: Optional output path (defaults to /tmp/{name}.tar.gz)
+        arcname: Optional name for root directory in tar (defaults to directory.name)
 
     Returns:
         Path to created tar file
@@ -19,14 +20,18 @@ def create_tar(directory: Path, output_path: Optional[Path] = None) -> Path:
     if not directory.exists() or not directory.is_dir():
         raise ValueError(f"Directory not found: {directory}")
 
+    # Default arcname to directory name
+    if arcname is None:
+        arcname = directory.name
+
     # Default output path
     if output_path is None:
-        output_path = Path(f"/tmp/{directory.name}.tar.gz")
+        output_path = Path(f"/tmp/{arcname}.tar.gz")
 
     # Create compressed tar
     with tarfile.open(output_path, "w:gz") as tar:
-        # Add directory with relative paths (arcname removes parent path)
-        tar.add(directory, arcname=directory.name, recursive=True)
+        # Add directory with specified arcname
+        tar.add(directory, arcname=arcname, recursive=True)
 
     return output_path
 
