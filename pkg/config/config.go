@@ -35,8 +35,8 @@ type AgentConfig struct {
 
 // Runtime type constants
 const (
-	RuntimePython3 = "python3"
-	RuntimeNode    = "node" // Future support
+	RuntimePython3  = "python3"
+	RuntimeNodeJS20 = "nodejs20" // Node.js 20 LTS with OpenAI Agents JS SDK support
 )
 
 // Default values

@@ -1,0 +1,16 @@
+name: calculator-agent-js
+runtime: nodejs20
+module: agent.js
+entrypoint: handler
+
+# Memory configuration
+memory: 256
+memory_limit: 512
+
+# Timeout configuration
+timeout: 120
+idle_timeout: 60
+
+# Environment variables (resolved from local shell at deploy time)
+env:
+  - OPENAI_API_KEY=${OPENAI_API_KEY}

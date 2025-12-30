@@ -40,18 +40,46 @@ const (
 // Namespaces NOT enabled (intentionally):
 //   - network: Agents need host network for LLM API calls
 //   - user: Adds complexity, we use non-root UID instead
+//
+// Runtime support:
+//   - python3: Uses /usr/local/bin/python3.10 with _entrypoint.py
+//   - nodejs20: Uses /usr/local/bin/node with _entrypoint.mjs
 func GenerateSpec(cfg *config.AgentConfig) *Spec {
 	// Calculate memory limit in bytes
 	memoryLimit := int64(cfg.MemoryLimit * 1024 * 1024)
 
-	// Build environment variables
-	env := []string{
-		"PATH=/usr/local/bin:/usr/bin:/bin",
-		"PYTHONPATH=/packages:/agent",
-		"PYTHONUNBUFFERED=1",
-		"PYTHONDONTWRITEBYTECODE=1",
-		"HOME=/tmp", // Non-root user needs writable HOME
+	// Build runtime-specific process args and environment
+	var args []string
+	var env []string
+
+	switch cfg.Runtime {
+	case config.RuntimeNodeJS20:
+		// Node.js 20 runtime
+		args = []string{
+			"/usr/local/bin/node",
+			"/agent/_entrypoint.mjs",
+		}
+		env = []string{
+			"PATH=/usr/local/bin:/usr/bin:/bin",
+			"NODE_PATH=/packages:/agent/node_modules:/agent",
+			"NODE_ENV=production",
+			"HOME=/tmp", // Non-root user needs writable HOME
+		}
+	default:
+		// Python 3 runtime (default)
+		args = []string{
+			"/usr/local/bin/python3.10",
+			"/agent/_entrypoint.py",
+		}
+		env = []string{
+			"PATH=/usr/local/bin:/usr/bin:/bin",
+			"PYTHONPATH=/packages:/agent",
+			"PYTHONUNBUFFERED=1",
+			"PYTHONDONTWRITEBYTECODE=1",
+			"HOME=/tmp", // Non-root user needs writable HOME
+		}
 	}
+
 	// Append agent-specific environment variables
 	env = append(env, cfg.Env...)
 
@@ -63,12 +91,9 @@ func GenerateSpec(cfg *config.AgentConfig) *Spec {
 				UID: ContainerUID,
 				GID: ContainerGID,
 			},
-			Args: []string{
-				"/usr/local/bin/python3.10",
-				"/agent/_entrypoint.py",
-			},
-			Env: env,
-			Cwd: "/agent",
+			Args: args,
+			Env:  env,
+			Cwd:  "/agent",
 			// Security: Drop ALL Linux capabilities
 			Capabilities: &Capabilities{
 				Bounding:    []string{},

@@ -61,13 +61,10 @@ func Validate(cfg *AgentConfig) error {
 // validateRuntime checks if the runtime is supported
 func validateRuntime(runtime string) error {
 	switch runtime {
-	case RuntimePython3:
+	case RuntimePython3, RuntimeNodeJS20:
 		return nil
-	case RuntimeNode:
-		// Node.js support is planned but not yet implemented
-		return NewFieldError(ErrCodeUnsupportedRT, "runtime", "node runtime is not yet supported")
 	default:
-		return NewFieldError(ErrCodeUnsupportedRT, "runtime", "unsupported runtime: "+runtime+". Supported: python3")
+		return NewFieldError(ErrCodeUnsupportedRT, "runtime", "unsupported runtime: "+runtime+". Supported: python3, nodejs20")
 	}
 }
 
@@ -76,25 +73,37 @@ func validateModuleExists(cfg *AgentConfig) error {
 	// Build full path to module
 	modulePath := filepath.Join(cfg.AgentDir, cfg.Module)
 
-	// Check if it's a Python file (add .py extension if needed)
-	if !strings.HasSuffix(modulePath, ".py") {
-		modulePath = modulePath + ".py"
+	// Determine extensions to try based on runtime
+	var extensions []string
+	switch cfg.Runtime {
+	case RuntimeNodeJS20:
+		extensions = []string{".js", ".mjs", ""}
+	default: // Python
+		extensions = []string{".py", ""}
 	}
 
 	// Check at root level first
-	if _, err := os.Stat(modulePath); err == nil {
-		return nil
+	for _, ext := range extensions {
+		checkPath := modulePath
+		if ext != "" && !strings.HasSuffix(checkPath, ext) {
+			checkPath = checkPath + ext
+		}
+		if _, err := os.Stat(checkPath); err == nil {
+			return nil
+		}
 	}
 
 	// If not found, try agent/ subdirectory (new deploy structure)
 	modulePathInAgent := filepath.Join(cfg.AgentDir, "agent", cfg.Module)
-	if !strings.HasSuffix(modulePathInAgent, ".py") {
-		modulePathInAgent = modulePathInAgent + ".py"
+	for _, ext := range extensions {
+		checkPath := modulePathInAgent
+		if ext != "" && !strings.HasSuffix(checkPath, ext) {
+			checkPath = checkPath + ext
+		}
+		if _, err := os.Stat(checkPath); err == nil {
+			return nil
+		}
 	}
 
-	if _, err := os.Stat(modulePathInAgent); os.IsNotExist(err) {
-		return NewFieldError(ErrCodeNotFound, "module", "module file not found: "+cfg.Module)
-	}
-
-	return nil
+	return NewFieldError(ErrCodeNotFound, "module", "module file not found: "+cfg.Module)
 }

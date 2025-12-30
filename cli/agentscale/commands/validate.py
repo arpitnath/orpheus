@@ -71,8 +71,9 @@ def validate(
                 print_success(f"✓ Entrypoint function: {config['entrypoint']}")
 
             # Check 7: Runtime supported
-            if "runtime" in config and config["runtime"] != "python3":
-                errors.append(f"Unsupported runtime: {config['runtime']} (only python3 supported)")
+            supported_runtimes = ["python3", "nodejs20"]
+            if "runtime" in config and config["runtime"] not in supported_runtimes:
+                errors.append(f"Unsupported runtime: {config['runtime']} (supported: {', '.join(supported_runtimes)})")
 
         except yaml.YAMLError as e:
             errors.append(f"Invalid YAML: {e}")

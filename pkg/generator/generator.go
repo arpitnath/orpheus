@@ -10,7 +10,10 @@ import (
 	"agentscale/pkg/config"
 )
 
-const entrypointFileName = "_entrypoint.py"
+const (
+	entrypointFileNamePython = "_entrypoint.py"
+	entrypointFileNameNodeJS = "_entrypoint.mjs" // .mjs for ESM modules
+)
 
 // Generator creates entry point files for agents
 type Generator struct{}
@@ -27,19 +30,34 @@ type TemplateData struct {
 	InputType  string
 }
 
-// Generate creates the _entrypoint.py file in the agent directory
+// Generate creates the entrypoint file in the agent directory.
+// For Python: _entrypoint.py
+// For Node.js: _entrypoint.mjs
 func (g *Generator) Generate(cfg *config.AgentConfig, async bool) (string, error) {
-	// Prepare template data
-	data := TemplateData{
-		Module:     stripPyExtension(cfg.Module),
-		Entrypoint: cfg.Entrypoint,
-		InputType:  cfg.InputType,
+	// Determine runtime and select appropriate template/filename
+	var templateStr string
+	var entrypointFileName string
+	var moduleName string
+
+	switch cfg.Runtime {
+	case config.RuntimeNodeJS20:
+		templateStr = NodeJSTemplate
+		entrypointFileName = entrypointFileNameNodeJS
+		moduleName = stripJSExtension(cfg.Module)
+	default: // Python (default)
+		templateStr = PythonSyncTemplate
+		if async {
+			templateStr = PythonAsyncTemplate
+		}
+		entrypointFileName = entrypointFileNamePython
+		moduleName = stripPyExtension(cfg.Module)
 	}
 
-	// Select template based on async flag
-	templateStr := PythonSyncTemplate
-	if async {
-		templateStr = PythonAsyncTemplate
+	// Prepare template data
+	data := TemplateData{
+		Module:     moduleName,
+		Entrypoint: cfg.Entrypoint,
+		InputType:  cfg.InputType,
 	}
 
 	// Parse template
@@ -73,15 +91,26 @@ func (g *Generator) Generate(cfg *config.AgentConfig, async bool) (string, error
 
 // GenerateString returns the generated entry point as a string (for testing)
 func (g *Generator) GenerateString(cfg *config.AgentConfig, async bool) (string, error) {
-	data := TemplateData{
-		Module:     stripPyExtension(cfg.Module),
-		Entrypoint: cfg.Entrypoint,
-		InputType:  cfg.InputType,
+	// Determine runtime and select appropriate template
+	var templateStr string
+	var moduleName string
+
+	switch cfg.Runtime {
+	case config.RuntimeNodeJS20:
+		templateStr = NodeJSTemplate
+		moduleName = stripJSExtension(cfg.Module)
+	default: // Python (default)
+		templateStr = PythonSyncTemplate
+		if async {
+			templateStr = PythonAsyncTemplate
+		}
+		moduleName = stripPyExtension(cfg.Module)
 	}
 
-	templateStr := PythonSyncTemplate
-	if async {
-		templateStr = PythonAsyncTemplate
+	data := TemplateData{
+		Module:     moduleName,
+		Entrypoint: cfg.Entrypoint,
+		InputType:  cfg.InputType,
 	}
 
 	tmpl, err := template.New("entrypoint").Parse(templateStr)
@@ -102,19 +131,41 @@ func (g *Generator) Cleanup(entrypointPath string) error {
 	if entrypointPath == "" {
 		return nil
 	}
-	// Only remove if it's the generated file
-	if filepath.Base(entrypointPath) != entrypointFileName {
+	// Only remove if it's a generated file (Python or Node.js)
+	baseName := filepath.Base(entrypointPath)
+	if baseName != entrypointFileNamePython && baseName != entrypointFileNameNodeJS {
 		return nil
 	}
 	return os.Remove(entrypointPath)
 }
 
-// GetEntrypointPath returns the path where the entrypoint would be generated
+// GetEntrypointPath returns the path where the entrypoint would be generated.
+// For Python agents, use GetEntrypointPathPython.
+// For Node.js agents, use GetEntrypointPathNodeJS.
 func GetEntrypointPath(agentDir string) string {
-	return filepath.Join(agentDir, entrypointFileName)
+	// Default to Python for backwards compatibility
+	return filepath.Join(agentDir, entrypointFileNamePython)
+}
+
+// GetEntrypointPathForRuntime returns the entrypoint path for a specific runtime
+func GetEntrypointPathForRuntime(agentDir string, runtime string) string {
+	switch runtime {
+	case config.RuntimeNodeJS20:
+		return filepath.Join(agentDir, entrypointFileNameNodeJS)
+	default:
+		return filepath.Join(agentDir, entrypointFileNamePython)
+	}
 }
 
 // stripPyExtension removes .py extension if present
 func stripPyExtension(module string) string {
 	return strings.TrimSuffix(module, ".py")
+}
+
+// stripJSExtension removes .js, .mjs, or .ts extension if present
+func stripJSExtension(module string) string {
+	module = strings.TrimSuffix(module, ".js")
+	module = strings.TrimSuffix(module, ".mjs")
+	module = strings.TrimSuffix(module, ".ts")
+	return module
 }

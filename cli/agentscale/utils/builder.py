@@ -74,15 +74,19 @@ def read_agent_config(agent_path: str) -> Dict[str, Any]:
         raise ConfigError(f"Missing required fields in agent.yaml: {', '.join(missing)}")
 
     # Validate runtime
-    if data["runtime"] != "python3":
+    supported_runtimes = ["python3", "nodejs20"]
+    if data["runtime"] not in supported_runtimes:
         raise ConfigError(
             f"Unsupported runtime: {data['runtime']}\n"
-            f"Only 'python3' is supported in v0.1.0"
+            f"Supported: {', '.join(supported_runtimes)}"
         )
 
-    # Add runtime_version if not specified (default to 3.10)
+    # Add runtime_version if not specified
     if "runtime_version" not in data:
-        data["runtime_version"] = "3.10"
+        if data["runtime"] == "python3":
+            data["runtime_version"] = "3.10"
+        elif data["runtime"] == "nodejs20":
+            data["runtime_version"] = "20"
 
     # Add agent_path for reference
     data["agent_path"] = str(Path(agent_path).absolute())
@@ -98,8 +102,8 @@ def find_base_image(runtime: str, version: str) -> Path:
     """Find base image directory (works on Linux and macOS+Lima).
 
     Args:
-        runtime: Runtime type (python3, node, etc.)
-        version: Runtime version (3.10, 3.11, etc.)
+        runtime: Runtime type (python3, nodejs20, etc.)
+        version: Runtime version (3.10, 20, etc.)
 
     Returns:
         Path to base image directory
@@ -107,23 +111,29 @@ def find_base_image(runtime: str, version: str) -> Path:
     Raises:
         ImageNotFoundError: If base image not found
     """
-    if runtime != "python3":
+    images_dir = Path.home() / ".agentscale" / "images"
+
+    # Determine image name based on runtime
+    if runtime == "python3":
+        image_name = f"python-{version}"
+        build_script = f"./scripts/build-ubuntu-python-from-lima.sh"
+    elif runtime == "nodejs20":
+        image_name = f"nodejs-{version}"
+        build_script = f"./scripts/build-nodejs20-from-lima.sh"
+    else:
         raise ImageNotFoundError(
             f"Unsupported runtime: {runtime}\n"
-            f"Only python3 is supported in v0.1.0"
+            f"Supported: python3, nodejs20"
         )
 
-    # Always use directory-based image (not initrd)
-    image_name = f"python-{version}"
-    images_dir = Path.home() / ".agentscale" / "images"
     base_path = images_dir / image_name
 
     if not base_path.exists():
         raise ImageNotFoundError(
             f"Base image not found: {base_path}\n\n"
             f"Please build it first:\n"
-            f"  cd agentscale/isolate/scripts\n"
-            f"  ./build-python-{version}-image.sh\n"
+            f"  cd agentscale\n"
+            f"  {build_script}\n"
         )
 
     # Verify complete rootfs (must have /lib for dynamic linker)
@@ -131,8 +141,8 @@ def find_base_image(runtime: str, version: str) -> Path:
         raise ImageNotFoundError(
             f"Incomplete base image (missing /lib): {base_path}\n\n"
             f"Rebuild with:\n"
-            f"  cd agentscale/isolate/scripts\n"
-            f"  ./build-python-{version}-image.sh\n"
+            f"  cd agentscale\n"
+            f"  {build_script}\n"
         )
 
     return base_path
@@ -288,7 +298,7 @@ def build_agent_image(
     if verbose:
         print("[deploy] Step 2/5: Installing dependencies...")
     packages_dir = agent_image_dir / "packages"
-    install_dependencies(agent_path, packages_dir, no_cache, verbose=verbose)
+    install_dependencies(agent_path, packages_dir, no_cache, verbose=verbose, runtime=agent_config["runtime"])
     deps_size_bytes, deps_size_mb = calculate_size(packages_dir)
     if verbose and deps_size_mb > 0:
         print(f"[deploy] ✓ Dependencies installed ({deps_size_mb}MB)")
@@ -299,7 +309,7 @@ def build_agent_image(
     if verbose:
         print("[deploy] Step 3/5: Copying agent code...")
     agent_code_dir = agent_image_dir / "agent"
-    copy_agent_code(agent_path, agent_code_dir)
+    copy_agent_code(agent_path, agent_code_dir, runtime=agent_config["runtime"])
     code_size_bytes, code_size_mb = calculate_size(agent_code_dir)
     if verbose:
         print(f"[deploy] ✓ Agent code copied ({code_size_mb}MB)")
@@ -462,15 +472,29 @@ def copy_runtime(base_image_path: Path, agent_image_dir: Path) -> None:
 # Dependency Installation
 # ============================================================================
 
-def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = False, verbose: bool = False) -> None:
-    """Install Python dependencies from requirements.txt.
+def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = False, verbose: bool = False, runtime: str = "python3") -> None:
+    """Install dependencies based on runtime type.
 
-    On macOS, downloads Linux ARM64 packages for Lima VM execution.
+    For Python: Install from requirements.txt to packages_dir
+    For Node.js: Run npm install in agent directory (node_modules are copied with code)
 
     Args:
         agent_path: Path to agent directory
-        packages_dir: Target directory for packages
-        no_cache: If True, don't use pip cache
+        packages_dir: Target directory for packages (Python) or ignored (Node.js)
+        no_cache: If True, don't use pip/npm cache
+        verbose: Show progress
+        runtime: Runtime type (python3 or nodejs20)
+    """
+    if runtime == "nodejs20":
+        install_nodejs_dependencies(agent_path, no_cache, verbose)
+    else:
+        install_python_dependencies(agent_path, packages_dir, no_cache, verbose)
+
+
+def install_python_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = False, verbose: bool = False) -> None:
+    """Install Python dependencies from requirements.txt.
+
+    On macOS, downloads Linux ARM64 packages for Lima VM execution.
     """
     requirements_file = Path(agent_path) / "requirements.txt"
 
@@ -496,15 +520,14 @@ def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = F
     packages_dir.mkdir(parents=True, exist_ok=True)
 
     # Build pip command with Linux ARM64 target
-    # Note: Ubuntu 24.04 has Python 3.12, so we target that version
     cmd = [
         sys.executable, "-m", "pip", "install",
         "--target", str(packages_dir),
-        "--platform", "manylinux2014_aarch64",  # Linux ARM64 wheels
-        "--only-binary=:all:",  # Fail if no wheel available
-        "--python-version", "3.12",  # Match runtime version (Ubuntu 24.04 default)
-        "--implementation", "cp",  # CPython
-        "--abi", "cp312",  # Python 3.12 ABI
+        "--platform", "manylinux2014_aarch64",
+        "--only-binary=:all:",
+        "--python-version", "3.12",
+        "--implementation", "cp",
+        "--abi", "cp312",
         "-r", str(requirements_file),
         "--quiet"
     ]
@@ -512,16 +535,9 @@ def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = F
     if no_cache:
         cmd.append("--no-cache-dir")
 
-    # Run pip install
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
 
-        # Verify no macOS packages installed
         darwin_files = list(packages_dir.rglob("*.darwin.so"))
         if darwin_files:
             raise BuildError(
@@ -530,13 +546,56 @@ def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = F
             )
 
     except subprocess.CalledProcessError as e:
-        # Extract package name from error if possible
-        error_msg = e.stderr
-
         raise BuildError(
-            f"Failed to install dependencies:\n\n{error_msg}\n\n"
-            f"Check requirements.txt syntax and package availability on PyPI\n"
-            f"(Some packages may not have manylinux2014_aarch64 wheels)"
+            f"Failed to install dependencies:\n\n{e.stderr}\n\n"
+            f"Check requirements.txt syntax and package availability on PyPI"
+        )
+
+
+def install_nodejs_dependencies(agent_path: str, no_cache: bool = False, verbose: bool = False) -> None:
+    """Install Node.js dependencies from package.json.
+
+    Dependencies are installed in-place (node_modules in agent dir).
+    They will be copied with the agent code during deployment.
+    """
+    package_json = Path(agent_path) / "package.json"
+
+    if not package_json.exists():
+        if verbose:
+            print("[deploy] No package.json found, skipping npm install")
+        return
+
+    if verbose:
+        print("[deploy] Installing npm dependencies...")
+
+    # Build npm command
+    cmd = ["npm", "install", "--production"]
+    if no_cache:
+        cmd.append("--cache=/dev/null")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=agent_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        if verbose and result.stdout:
+            # Count packages
+            node_modules = Path(agent_path) / "node_modules"
+            if node_modules.exists():
+                pkg_count = len([d for d in node_modules.iterdir() if d.is_dir() and not d.name.startswith(".")])
+                print(f"[deploy] ✓ Installed {pkg_count} npm packages")
+
+    except subprocess.CalledProcessError as e:
+        raise BuildError(
+            f"Failed to install npm dependencies:\n\n{e.stderr}\n\n"
+            f"Check package.json syntax and network connectivity"
+        )
+    except FileNotFoundError:
+        raise BuildError(
+            "npm not found. Please install Node.js to deploy Node.js agents."
         )
 
 
@@ -544,20 +603,26 @@ def install_dependencies(agent_path: str, packages_dir: Path, no_cache: bool = F
 # Agent Code Copy
 # ============================================================================
 
-def copy_agent_code(agent_path: str, agent_code_dir: Path) -> None:
+def copy_agent_code(agent_path: str, agent_code_dir: Path, runtime: str = "python3") -> None:
     """Copy entire agent directory to image.
 
     Args:
         agent_path: Source agent directory
         agent_code_dir: Target directory in image
+        runtime: Runtime type (python3 or nodejs20)
     """
-    # Define ignore patterns
+    # Define ignore patterns based on runtime
     def ignore_patterns(directory, files):
         ignored = []
         for f in files:
-            if f in ("__pycache__", ".git", ".gitignore", "venv", ".venv", "node_modules"):
+            # Always ignore these
+            if f in ("__pycache__", ".git", ".gitignore", "venv", ".venv"):
                 ignored.append(f)
             elif f.endswith((".pyc", ".pyo", ".egg-info")):
+                ignored.append(f)
+            # For Python, ignore node_modules
+            # For Node.js, keep node_modules (they contain dependencies)
+            elif f == "node_modules" and runtime != "nodejs20":
                 ignored.append(f)
         return ignored
 
@@ -569,6 +634,13 @@ def copy_agent_code(agent_path: str, agent_code_dir: Path) -> None:
             symlinks=True,
             dirs_exist_ok=True
         )
+        # Fix permissions - container runs as UID 1000, needs readable files
+        # Directories: 755, Files: 644
+        for root, dirs, files in os.walk(agent_code_dir):
+            for d in dirs:
+                os.chmod(os.path.join(root, d), 0o755)
+            for f in files:
+                os.chmod(os.path.join(root, f), 0o644)
     except Exception as e:
         raise BuildError(f"Failed to copy agent code: {e}")
 
@@ -640,7 +712,10 @@ def create_manifest(agent_config: Dict[str, Any], agent_image_dir: Path, base_im
 # ============================================================================
 
 def generate_entrypoint(agent_config: Dict[str, Any], agent_code_dir: Path) -> None:
-    """Generate _entrypoint.py for deployed agent.
+    """Generate entrypoint script for deployed agent.
+
+    For Python: Generates _entrypoint.py
+    For Node.js: Generates _entrypoint.mjs
 
     Args:
         agent_config: Agent configuration dict
@@ -649,6 +724,16 @@ def generate_entrypoint(agent_config: Dict[str, Any], agent_code_dir: Path) -> N
     Raises:
         BuildError: If entrypoint generation fails
     """
+    runtime = agent_config.get("runtime", "python3")
+
+    if runtime == "nodejs20":
+        generate_nodejs_entrypoint(agent_config, agent_code_dir)
+    else:
+        generate_python_entrypoint(agent_config, agent_code_dir)
+
+
+def generate_python_entrypoint(agent_config: Dict[str, Any], agent_code_dir: Path) -> None:
+    """Generate _entrypoint.py for Python agents."""
     from string import Template
 
     module = agent_config["module"].rstrip(".py")
@@ -675,7 +760,6 @@ def main():
 
         # Handle async handlers
         if inspect.iscoroutinefunction(${entrypoint}) or inspect.iscoroutine(result):
-            # Handler is async - use asyncio.run() only for async handlers
             if inspect.iscoroutine(result):
                 result = asyncio.run(result)
             else:
@@ -699,7 +783,7 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()  # Sync function - no event loop unless handler is async
+    main()
 '''
 
     vars = {"module": module, "entrypoint": entrypoint}
@@ -716,5 +800,77 @@ if __name__ == "__main__":
         entrypoint_path.write_text(entrypoint_code)
         entrypoint_path.chmod(0o755)
     except Exception as e:
-        raise BuildError(f"Failed to generate entrypoint: {e}")
+        raise BuildError(f"Failed to generate Python entrypoint: {e}")
+
+
+def generate_nodejs_entrypoint(agent_config: Dict[str, Any], agent_code_dir: Path) -> None:
+    """Generate _entrypoint.mjs for Node.js agents."""
+    from string import Template
+
+    # Strip .js, .mjs, .ts extensions
+    module = agent_config["module"]
+    for ext in [".js", ".mjs", ".ts"]:
+        if module.endswith(ext):
+            module = module[:-len(ext)]
+            break
+
+    entrypoint = agent_config["entrypoint"]
+
+    template_str = '''#!/usr/bin/env node
+/**
+ * Auto-generated entry point - DO NOT EDIT
+ * Generated by AgentScale for Node.js runtime
+ */
+import { readFileSync } from 'fs';
+
+// Import the user's handler
+const module = await import('./${module}.js');
+const ${entrypoint} = module.${entrypoint} || module.default;
+
+async function main() {
+  try {
+    // Read input from stdin
+    const inputData = readFileSync(0, 'utf8').trim();
+    const data = inputData ? JSON.parse(inputData) : {};
+
+    // Call the handler
+    let result = await ${entrypoint}(data);
+
+    // Handle result serialization
+    let output;
+    if (result === null || result === undefined) {
+      output = {};
+    } else if (typeof result === 'object') {
+      output = result;
+    } else {
+      output = { result: String(result) };
+    }
+
+    // Write JSON output to stdout
+    console.log(JSON.stringify(output));
+
+  } catch (e) {
+    const errorOutput = {
+      error: e.message,
+      stack: e.stack,
+      status: 'error'
+    };
+    console.log(JSON.stringify(errorOutput));
+    process.exit(1);
+  }
+}
+
+main();
+'''
+
+    try:
+        entrypoint_code = Template(template_str).substitute({
+            "module": module,
+            "entrypoint": entrypoint
+        })
+        entrypoint_path = agent_code_dir / "_entrypoint.mjs"
+        entrypoint_path.write_text(entrypoint_code)
+        entrypoint_path.chmod(0o755)
+    except Exception as e:
+        raise BuildError(f"Failed to generate Node.js entrypoint: {e}")
 

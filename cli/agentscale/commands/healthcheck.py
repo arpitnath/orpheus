@@ -157,25 +157,39 @@ def check_socket() -> dict:
 
 
 def check_daemon_health() -> dict:
-    """Check daemon health endpoint."""
-    try:
-        import httpx
+    """Check daemon health endpoint via socket or TCP."""
+    import httpx
 
+    # Try 1: Unix socket (direct, no auth needed)
+    try:
         if sys.platform == "darwin":
             socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
         else:
             socket_path = Path("/var/run/agentscale.sock")
 
         transport = httpx.HTTPTransport(uds=str(socket_path))
-        with httpx.Client(transport=transport, timeout=5) as client:
+        with httpx.Client(transport=transport, timeout=3) as client:
             response = client.get("http://localhost/v1/health")
-            data = response.json()
+            if response.status_code == 200:
+                data = response.json()
+                version = data.get("version", "unknown")
+                return {"status": "pass", "component": "Daemon", "message": f"Responding (v{version})"}
+    except Exception:
+        pass  # Fall through to TCP check
 
+    # Try 2: TCP with configured server (needs auth)
+    try:
+        from agentscale.utils.client import get_client
+        client = get_client(timeout=5)
+        response = client.get("/v1/health")
+        if response.status_code == 200:
+            data = response.json()
             version = data.get("version", "unknown")
             return {"status": "pass", "component": "Daemon", "message": f"Responding (v{version})"}
+    except Exception:
+        pass
 
-    except Exception as e:
-        return {"status": "fail", "component": "Daemon", "message": "Not responding"}
+    return {"status": "fail", "component": "Daemon", "message": "Not responding"}
 
 
 def check_base_images() -> dict:
