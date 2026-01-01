@@ -2,6 +2,7 @@
 .claude/
 .claude.backup*/
 *.claude-*
+CLAUDE.md
 
 # Compiled binaries
 bin/
