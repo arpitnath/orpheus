@@ -1,0 +1,12 @@
+# Composio - Gmail integration with OAuth
+# Install pysher from git (latest version)
+git+https://github.com/deepbrook/Pysher.git#egg=pysher
+composio==0.10.3
+composio-langchain==0.10.3
+
+# LangChain for agent framework
+langchain==1.2.0
+langchain-openai==1.1.6
+
+# OpenAI API
+openai==1.109.1

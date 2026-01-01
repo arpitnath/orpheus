@@ -41,3 +41,14 @@ agents:
       scale_up_delay: 15s
       scale_down_delay: 1m
       queue_size: 100
+  calculator-agent-js:
+    image: /Users/arpit/.agentscale/agents/calculator-agent-js
+    scaling:
+      min_workers: 1
+      max_workers: 5
+      target_utilization: 2.0
+      scale_up_threshold: 3.0
+      scale_down_threshold: 0.5
+      scale_up_delay: 15s
+      scale_down_delay: 1m
+      queue_size: 100
