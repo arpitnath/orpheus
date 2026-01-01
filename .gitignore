@@ -53,3 +53,5 @@ data/
 # Test artifacts
 *.log
 coverage/
+
+research/
