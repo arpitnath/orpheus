@@ -1,0 +1,54 @@
+# Claude Code / Development
+.claude/
+.claude.backup*/
+*.claude-*
+
+# Compiled binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+*.test
+*.out
+vendor/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+dist/
+venv/
+env/
+
+# Node.js
+node_modules/
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data/Runtime
+data/
+*.db
+*.sqlite
+
+# Environment
+.env
+.env.local
+
+# Test artifacts
+*.log
+coverage/
