@@ -9,7 +9,7 @@ NC='\033[0m' # No Color
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-RUNTIME="$PROJECT_DIR/bin/agentscale-runtime"
+RUNTIME="$PROJECT_DIR/bin/orpheus-runtime"
 
 # Counters
 PASSED=0
@@ -82,7 +82,7 @@ fi
 # Test 5: Version command
 echo -n "Test 5: Version command... "
 output=$("$RUNTIME" version 2>&1)
-if echo "$output" | grep -q "agentscale-runtime"; then
+if echo "$output" | grep -q "orpheus-runtime"; then
     echo -e "${GREEN}PASSED${NC}"
     PASSED=$((PASSED + 1))
 else

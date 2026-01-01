@@ -5,16 +5,16 @@ set -euo pipefail
 # Extracts Ubuntu 24.04 filesystem directly from running Lima instance
 
 IMAGE_NAME="python-3.10"
-TARGET_DIR="$HOME/.agentscale/images/$IMAGE_NAME"
+TARGET_DIR="$HOME/.orpheus/images/$IMAGE_NAME"
 
 echo "=== Building Ubuntu-based Python 3.10 Base Image from Lima VM ==="
 echo "Target: $TARGET_DIR"
 echo ""
 
 # Check if Lima VM is running
-if ! limactl list | grep -q "agentscale.*Running"; then
-    echo "Error: Lima VM 'agentscale' is not running"
-    echo "Start it with: agentscale vm start"
+if ! limactl list | grep -q "orpheus.*Running"; then
+    echo "Error: Lima VM 'orpheus' is not running"
+    echo "Start it with: orpheus vm start"
     exit 1
 fi
 
@@ -23,8 +23,8 @@ echo ""
 
 # Install Python and dependencies in Lima VM
 echo "Installing Python 3.12 in Lima VM..."
-limactl shell agentscale -- sudo apt-get update -qq
-limactl shell agentscale -- sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+limactl shell orpheus -- sudo apt-get update -qq
+limactl shell orpheus -- sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     python3.12 \
     python3-pip \
     ca-certificates
@@ -34,14 +34,14 @@ echo ""
 
 # Create temporary directory in Lima
 echo "Creating base rootfs in Lima VM..."
-limactl shell agentscale -- sudo rm -rf /tmp/agentscale-base
-limactl shell agentscale -- sudo mkdir -p /tmp/agentscale-base
+limactl shell orpheus -- sudo rm -rf /tmp/orpheus-base
+limactl shell orpheus -- sudo mkdir -p /tmp/orpheus-base
 
 # Copy essential directories from Ubuntu
 echo "Copying Ubuntu system files..."
-limactl shell agentscale -- sudo bash -c '
+limactl shell orpheus -- sudo bash -c '
     set -e
-    BASE=/tmp/agentscale-base
+    BASE=/tmp/orpheus-base
 
     # Copy essential system directories
     mkdir -p $BASE/{bin,lib,lib64,usr/bin,usr/lib,etc,tmp,dev,proc,sys,var}
@@ -96,12 +96,12 @@ limactl shell agentscale -- sudo bash -c '
 
 # Create tarball
 echo "Creating tarball..."
-limactl shell agentscale -- sudo tar -czf /tmp/ubuntu-base.tar.gz -C /tmp/agentscale-base .
+limactl shell orpheus -- sudo tar -czf /tmp/ubuntu-base.tar.gz -C /tmp/orpheus-base .
 
 # Copy tarball to host
 echo "Copying to host..."
 rm -f /tmp/ubuntu-base.tar.gz
-limactl copy agentscale:/tmp/ubuntu-base.tar.gz /tmp/ubuntu-base.tar.gz
+limactl copy orpheus:/tmp/ubuntu-base.tar.gz /tmp/ubuntu-base.tar.gz
 
 # Extract to target
 echo "Extracting to $TARGET_DIR..."
@@ -137,7 +137,7 @@ cat > "$TARGET_DIR/manifest.json" <<EOF
     ]
   },
   "labels": {
-    "maintainer": "agentscale",
+    "maintainer": "orpheus",
     "category": "base",
     "libc": "glibc"
   }
@@ -154,15 +154,15 @@ SIZE_MB=$((SIZE_BYTES / 1024 / 1024))
 
 # Cleanup
 rm -f /tmp/ubuntu-base.tar.gz
-limactl shell agentscale -- sudo rm -rf /tmp/agentscale-base /tmp/ubuntu-base.tar.gz
+limactl shell orpheus -- sudo rm -rf /tmp/orpheus-base /tmp/ubuntu-base.tar.gz
 
 echo ""
 echo "✓ Base image built successfully!"
 echo ""
 echo "Location: $TARGET_DIR"
 echo "Size: ${SIZE_MB}MB"
-echo "Python: $(limactl shell agentscale -- python3.12 --version)"
+echo "Python: $(limactl shell orpheus -- python3.12 --version)"
 echo "Libc: glibc (Ubuntu 24.04)"
 echo ""
 echo "Done! You can now deploy agents with:"
-echo "  agentscale deploy <agent-path>"
+echo "  orpheus deploy <agent-path>"

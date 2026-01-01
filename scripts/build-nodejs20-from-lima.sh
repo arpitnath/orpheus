@@ -5,16 +5,16 @@ set -euo pipefail
 # Extracts Ubuntu 24.04 filesystem with Node.js 20 LTS directly from running Lima instance
 
 IMAGE_NAME="nodejs-20"
-TARGET_DIR="$HOME/.agentscale/images/$IMAGE_NAME"
+TARGET_DIR="$HOME/.orpheus/images/$IMAGE_NAME"
 
 echo "=== Building Ubuntu-based Node.js 20 Base Image from Lima VM ==="
 echo "Target: $TARGET_DIR"
 echo ""
 
 # Check if Lima VM is running
-if ! limactl list | grep -q "agentscale.*Running"; then
-    echo "Error: Lima VM 'agentscale' is not running"
-    echo "Start it with: agentscale vm start"
+if ! limactl list | grep -q "orpheus.*Running"; then
+    echo "Error: Lima VM 'orpheus' is not running"
+    echo "Start it with: orpheus vm start"
     exit 1
 fi
 
@@ -23,10 +23,10 @@ echo ""
 
 # Install Node.js 20 LTS in Lima VM
 echo "Installing Node.js 20 LTS in Lima VM..."
-limactl shell agentscale -- sudo apt-get update -qq
+limactl shell orpheus -- sudo apt-get update -qq
 
 # Install Node.js 20 from NodeSource
-limactl shell agentscale -- sudo bash -c '
+limactl shell orpheus -- sudo bash -c '
     # Install prerequisites
     apt-get install -y -qq curl ca-certificates gnupg
 
@@ -41,20 +41,20 @@ limactl shell agentscale -- sudo bash -c '
 '
 
 echo "✓ Node.js installed"
-limactl shell agentscale -- node --version
-limactl shell agentscale -- npm --version
+limactl shell orpheus -- node --version
+limactl shell orpheus -- npm --version
 echo ""
 
 # Create temporary directory in Lima
 echo "Creating base rootfs in Lima VM..."
-limactl shell agentscale -- sudo rm -rf /tmp/agentscale-nodejs-base
-limactl shell agentscale -- sudo mkdir -p /tmp/agentscale-nodejs-base
+limactl shell orpheus -- sudo rm -rf /tmp/orpheus-nodejs-base
+limactl shell orpheus -- sudo mkdir -p /tmp/orpheus-nodejs-base
 
 # Copy essential directories from Ubuntu
 echo "Copying Ubuntu system files with Node.js..."
-limactl shell agentscale -- sudo bash -c '
+limactl shell orpheus -- sudo bash -c '
     set -e
-    BASE=/tmp/agentscale-nodejs-base
+    BASE=/tmp/orpheus-nodejs-base
 
     # Copy essential system directories
     mkdir -p $BASE/{bin,lib,lib64,usr/bin,usr/lib,etc,tmp,dev,proc,sys,var}
@@ -111,12 +111,12 @@ limactl shell agentscale -- sudo bash -c '
 
 # Create tarball
 echo "Creating tarball..."
-limactl shell agentscale -- sudo tar -czf /tmp/nodejs-base.tar.gz -C /tmp/agentscale-nodejs-base .
+limactl shell orpheus -- sudo tar -czf /tmp/nodejs-base.tar.gz -C /tmp/orpheus-nodejs-base .
 
 # Copy tarball to host
 echo "Copying to host..."
 rm -f /tmp/nodejs-base.tar.gz
-limactl copy agentscale:/tmp/nodejs-base.tar.gz /tmp/nodejs-base.tar.gz
+limactl copy orpheus:/tmp/nodejs-base.tar.gz /tmp/nodejs-base.tar.gz
 
 # Extract to target
 echo "Extracting to $TARGET_DIR..."
@@ -125,7 +125,7 @@ mkdir -p "$TARGET_DIR"
 tar -xzf /tmp/nodejs-base.tar.gz -C "$TARGET_DIR"
 
 # Get Node.js version
-NODE_VERSION=$(limactl shell agentscale -- node --version | tr -d 'v')
+NODE_VERSION=$(limactl shell orpheus -- node --version | tr -d 'v')
 
 # Create manifest
 cat > "$TARGET_DIR/manifest.json" <<EOF
@@ -155,7 +155,7 @@ cat > "$TARGET_DIR/manifest.json" <<EOF
     ]
   },
   "labels": {
-    "maintainer": "agentscale",
+    "maintainer": "orpheus",
     "category": "base",
     "libc": "glibc"
   }
@@ -172,7 +172,7 @@ SIZE_MB=$((SIZE_BYTES / 1024 / 1024))
 
 # Cleanup
 rm -f /tmp/nodejs-base.tar.gz
-limactl shell agentscale -- sudo rm -rf /tmp/agentscale-nodejs-base /tmp/nodejs-base.tar.gz
+limactl shell orpheus -- sudo rm -rf /tmp/orpheus-nodejs-base /tmp/nodejs-base.tar.gz
 
 echo ""
 echo "✓ Node.js base image built successfully!"
@@ -183,4 +183,4 @@ echo "Node.js: v$NODE_VERSION"
 echo "Libc: glibc (Ubuntu 24.04)"
 echo ""
 echo "Done! You can now deploy Node.js agents with:"
-echo "  agentscale deploy <agent-path>  # where agent.yaml has runtime: nodejs20"
+echo "  orpheus deploy <agent-path>  # where agent.yaml has runtime: nodejs20"
