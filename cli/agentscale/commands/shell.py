@@ -14,7 +14,7 @@ def shell() -> None:
     Only available on macOS with Lima VM.
 
     Examples:
-        agentscale shell
+        orpheus shell
     """
     if sys.platform != "darwin":
         print_error(
@@ -41,10 +41,10 @@ def shell() -> None:
         text=True
     )
 
-    if "agentscale" not in result.stdout or "Running" not in result.stdout:
+    if "orpheus" not in result.stdout or "Running" not in result.stdout:
         print_error(
             "AgentScale VM is not running",
-            "Start it with: agentscale vm start"
+            "Start it with: orpheus vm start"
         )
         raise typer.Exit(1)
 
@@ -54,7 +54,7 @@ def shell() -> None:
     print("")
 
     try:
-        subprocess.run(["limactl", "shell", "agentscale"])
+        subprocess.run(["limactl", "shell", "orpheus"])
     except KeyboardInterrupt:
         print("")
         print_info("Shell session ended")

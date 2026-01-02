@@ -14,3 +14,18 @@ Provides-Extra: dev
 Requires-Dist: pytest>=7.0.0; extra == "dev"
 Requires-Dist: black>=23.0.0; extra == "dev"
 Requires-Dist: ruff>=0.1.0; extra == "dev"
+
+# Orpheus CLI
+
+This directory will contain the TypeScript-based CLI for Orpheus.
+
+The legacy Python CLI has been archived to `archived/python-cli/`.
+
+## Planned Stack
+- TypeScript
+- Node.js
+- React Ink (for TUI components)
+- Commander.js or similar CLI framework
+
+## Status
+Not yet implemented - coming soon after daemon restructuring is complete.

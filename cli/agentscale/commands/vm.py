@@ -36,12 +36,12 @@ def get_host_arch() -> str:
 
 
 def find_lima_template() -> Optional[Path]:
-    """Find the Lima template (agentscale.yaml)."""
+    """Find the Lima template (orpheus.yaml)."""
     locations = [
         # Relative to CLI package (development)
-        Path(__file__).parent.parent.parent.parent / "lima" / "agentscale.yaml",
-        # ~/.agentscale/lima (installed)
-        Path.home() / ".agentscale" / "lima" / "agentscale.yaml",
+        Path(__file__).parent.parent.parent.parent / "lima" / "orpheus.yaml",
+        # ~/.orpheus/lima (installed)
+        Path.home() / ".orpheus" / "lima" / "orpheus.yaml",
     ]
 
     for loc in locations:
@@ -54,13 +54,13 @@ def find_lima_template() -> Optional[Path]:
 def find_daemon_binary_linux() -> Optional[Path]:
     """Find the Linux daemon binary for Lima VM deployment."""
     arch = get_host_arch()
-    binary_name = f"agentscale-daemon-linux-{arch}"
+    binary_name = f"orpheusd-linux-{arch}"
 
     locations = [
         # Relative to CLI package (development)
         Path(__file__).parent.parent.parent.parent / "bin" / binary_name,
-        # ~/.agentscale/bin (installed)
-        Path.home() / ".agentscale" / "bin" / binary_name,
+        # ~/.orpheus/bin (installed)
+        Path.home() / ".orpheus" / "bin" / binary_name,
     ]
 
     for loc in locations:
@@ -69,8 +69,8 @@ def find_daemon_binary_linux() -> Optional[Path]:
 
     # Fallback: try without arch suffix (backward compat)
     fallback_locations = [
-        Path(__file__).parent.parent.parent.parent / "bin" / "agentscale-daemon-linux",
-        Path.home() / ".agentscale" / "bin" / "agentscale-daemon-linux",
+        Path(__file__).parent.parent.parent.parent / "bin" / "orpheusd-linux",
+        Path.home() / ".orpheus" / "bin" / "orpheusd-linux",
     ]
 
     for loc in fallback_locations:
@@ -87,7 +87,7 @@ def copy_daemon_to_vm() -> bool:
         arch = get_host_arch()
         print_error(
             f"Linux daemon binary not found for {arch}",
-            f"Build with: cd agentscale && make build-daemon-linux-{arch}"
+            f"Build with: cd orpheus && make build-daemon-linux-{arch}"
         )
         return False
 
@@ -97,19 +97,19 @@ def copy_daemon_to_vm() -> bool:
         subprocess.run([
             "limactl", "copy",
             str(daemon_binary),
-            "agentscale:/tmp/agentscale-daemon"
+            "orpheus:/tmp/orpheusd"
         ], check=True, capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
         # Move to /usr/local/bin with sudo
         subprocess.run([
-            "limactl", "shell", "agentscale", "--",
-            "sudo", "mv", "/tmp/agentscale-daemon", "/usr/local/bin/agentscale-daemon"
+            "limactl", "shell", "orpheus", "--",
+            "sudo", "mv", "/tmp/orpheusd", "/usr/local/bin/orpheusd"
         ], check=True, capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
         # Make executable
         subprocess.run([
-            "limactl", "shell", "agentscale", "--",
-            "sudo", "chmod", "+x", "/usr/local/bin/agentscale-daemon"
+            "limactl", "shell", "orpheus", "--",
+            "sudo", "chmod", "+x", "/usr/local/bin/orpheusd"
         ], check=True, capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
         return True
@@ -137,14 +137,14 @@ def start_daemon_in_vm() -> bool:
     try:
         # Kill any existing daemon first
         subprocess.run([
-            "limactl", "shell", "agentscale", "--",
-            "sudo", "pkill", "-f", "agentscale-daemon"
+            "limactl", "shell", "orpheus", "--",
+            "sudo", "pkill", "-f", "orpheusd"
         ], capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)  # Ignore errors if no process
 
         # Start daemon with environment variables
-        cmd = f"{env_prefix}nohup /usr/local/bin/agentscale-daemon --socket /var/run/agentscale.sock > /var/log/agentscale-daemon.log 2>&1 &"
+        cmd = f"{env_prefix}nohup /usr/local/bin/orpheusd --socket /var/run/orpheus.sock > /var/log/orpheusd.log 2>&1 &"
         subprocess.run([
-            "limactl", "shell", "agentscale", "--",
+            "limactl", "shell", "orpheus", "--",
             "sudo", "bash", "-c", cmd
         ], check=True, capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
@@ -153,8 +153,8 @@ def start_daemon_in_vm() -> bool:
 
         # Fix socket permissions so Lima can forward it
         subprocess.run([
-            "limactl", "shell", "agentscale", "--",
-            "sudo", "chmod", "666", "/var/run/agentscale.sock"
+            "limactl", "shell", "orpheus", "--",
+            "sudo", "chmod", "666", "/var/run/orpheus.sock"
         ], capture_output=True, timeout=LIMA_COMMAND_TIMEOUT)
 
         return True
@@ -168,7 +168,7 @@ def start_daemon_in_vm() -> bool:
 
 def wait_for_daemon_socket(timeout: int = 10) -> bool:
     """Wait for daemon socket to be available."""
-    socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+    socket_path = Path.home() / ".lima" / "orpheus" / "sock" / "orpheus.sock"
 
     for i in range(timeout):
         if socket_path.exists():
@@ -188,7 +188,7 @@ def wait_for_ssh_ready(max_attempts: int = 15, interval: float = 2.0) -> bool:
     for attempt in range(max_attempts):
         try:
             result = subprocess.run(
-                ["limactl", "shell", "agentscale", "--", "echo", "ready"],
+                ["limactl", "shell", "orpheus", "--", "echo", "ready"],
                 capture_output=True,
                 text=True,
                 timeout=5,  # Quick timeout for each probe
@@ -217,7 +217,7 @@ def check_lima_installed() -> bool:
 
 
 def get_instance_status() -> Optional[str]:
-    """Get the status of the agentscale Lima instance."""
+    """Get the status of the orpheus Lima instance."""
     try:
         result = subprocess.run(
             ["limactl", "list", "--format", "{{ .Name }}\t{{ .Status }}"],
@@ -227,7 +227,7 @@ def get_instance_status() -> Optional[str]:
         )
 
         for line in result.stdout.strip().split("\n"):
-            if line.startswith("agentscale\t"):
+            if line.startswith("orpheus\t"):
                 return line.split("\t")[1]
 
         return None  # Instance doesn't exist
@@ -258,7 +258,7 @@ def start(
     if status == "Running":
         if force:
             print_info("Stopping existing VM...")
-            subprocess.run(["limactl", "stop", "agentscale"], check=True, timeout=LIMA_STOP_TIMEOUT)
+            subprocess.run(["limactl", "stop", "orpheus"], check=True, timeout=LIMA_STOP_TIMEOUT)
         else:
             print_success("VM is already running")
             return
@@ -271,7 +271,7 @@ def start(
         if not template:
             print_error(
                 "Lima template not found",
-                "Expected at: agentscale/lima/agentscale.yaml"
+                "Expected at: orpheus/lima/orpheus.yaml"
             )
             raise typer.Exit(1)
 
@@ -280,7 +280,7 @@ def start(
 
         try:
             subprocess.run(
-                ["limactl", "start", "--tty=false", f"--name=agentscale", str(template)],
+                ["limactl", "start", "--tty=false", f"--name=orpheus", str(template)],
                 check=True,
                 timeout=LIMA_START_TIMEOUT
             )
@@ -293,7 +293,7 @@ def start(
         print_info("Starting AgentScale VM...")
         try:
             subprocess.run(
-                ["limactl", "start", "--tty=false", "agentscale"],
+                ["limactl", "start", "--tty=false", "orpheus"],
                 check=True,
                 timeout=LIMA_START_TIMEOUT
             )
@@ -318,12 +318,12 @@ def start(
     print_info("Waiting for daemon socket...")
     if wait_for_daemon_socket(timeout=15):
         print_success("Daemon is ready!")
-        socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+        socket_path = Path.home() / ".lima" / "orpheus" / "sock" / "orpheus.sock"
         print_info(f"Socket: {socket_path}")
     else:
         print_error(
             "Daemon socket not found",
-            "Check logs with: agentscale vm ssh -- sudo cat /var/log/agentscale-daemon.log"
+            "Check logs with: orpheus vm ssh -- sudo cat /var/log/orpheusd.log"
         )
 
 
@@ -346,7 +346,7 @@ def stop() -> None:
 
     print_info("Stopping AgentScale VM...")
     try:
-        subprocess.run(["limactl", "stop", "agentscale"], check=True)
+        subprocess.run(["limactl", "stop", "orpheus"], check=True)
         print_success("VM stopped")
     except subprocess.CalledProcessError as e:
         print_error(f"Failed to stop VM: {e}")
@@ -367,7 +367,7 @@ def status() -> None:
 
     if vm_status is None:
         print_info("VM Status: Not Created")
-        print_info("Run 'agentscale vm start' to create the VM")
+        print_info("Run 'orpheus vm start' to create the VM")
         return
 
     # Get detailed info
@@ -381,7 +381,7 @@ def status() -> None:
         )
 
         for line in result.stdout.strip().split("\n"):
-            if line.startswith("agentscale\t"):
+            if line.startswith("orpheus\t"):
                 parts = line.split("\t")
                 name, status, arch, cpus, memory, disk = parts[:6]
 
@@ -398,7 +398,7 @@ def status() -> None:
                 # Show socket path if running
                 if status == "Running":
                     home = Path.home()
-                    socket_path = home / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+                    socket_path = home / ".lima" / "orpheus" / "sock" / "orpheus.sock"
                     print_info(f"Socket: {socket_path}")
 
                 return
@@ -421,7 +421,7 @@ def ssh() -> None:
     if status != "Running":
         print_error(
             "VM is not running",
-            "Start it with: agentscale vm start"
+            "Start it with: orpheus vm start"
         )
         raise typer.Exit(1)
 
@@ -433,7 +433,7 @@ def ssh() -> None:
         raise typer.Exit(1)
 
     print_info("Connecting to AgentScale VM...")
-    os.execvp("limactl", ["limactl", "shell", "agentscale"])
+    os.execvp("limactl", ["limactl", "shell", "orpheus"])
 
 
 @app.command()
@@ -459,7 +459,7 @@ def delete(
 
     print_info("Deleting AgentScale VM...")
     try:
-        subprocess.run(["limactl", "delete", "--force", "agentscale"], check=True)
+        subprocess.run(["limactl", "delete", "--force", "orpheus"], check=True)
         print_success("VM deleted")
     except subprocess.CalledProcessError as e:
         print_error(f"Failed to delete VM: {e}")

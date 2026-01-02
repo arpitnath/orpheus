@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any
 import yaml
 
 
-CONFIG_FILE = Path.home() / ".agentscale" / "config.yaml"
+CONFIG_FILE = Path.home() / ".orpheus" / "config.yaml"
 
 
 def load_config() -> Dict[str, Any]:
@@ -70,10 +70,10 @@ def get_default_socket_path() -> Path:
 
     if sys.platform == "darwin":
         # macOS: Lima-forwarded socket
-        return Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+        return Path.home() / ".lima" / "orpheus" / "sock" / "orpheus.sock"
 
     # Linux: Local socket
-    return Path("/var/run/agentscale.sock")
+    return Path("/var/run/orpheus.sock")
 
 
 def get_active_server() -> Dict[str, Any]:

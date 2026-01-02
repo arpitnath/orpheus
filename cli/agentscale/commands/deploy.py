@@ -66,7 +66,7 @@ def resolve_env_vars_for_deploy(env_list: list) -> list:
 
 def deploy(
     agent_path: str = typer.Argument(..., help="Path to agent directory containing agent.yaml"),
-    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to agentscale.yaml to update"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to orpheus.yaml to update"),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing deployment"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Don't use pip cache for dependencies"),
     remote: bool = typer.Option(False, "--remote", help="Deploy to remote server"),
@@ -80,12 +80,12 @@ def deploy(
     1. Reads agent.yaml from the agent directory
     2. Finds the appropriate base image (python-3.10)
     3. Builds a complete agent image with runtime, dependencies, and code
-    4. Updates agentscale.yaml with the deployment
+    4. Updates orpheus.yaml with the deployment
 
     Examples:
-        agentscale deploy ./my-agent
-        agentscale deploy ./my-agent --force
-        agentscale deploy ./my-agent --config ./custom-config.yaml
+        orpheus deploy ./my-agent
+        orpheus deploy ./my-agent --force
+        orpheus deploy ./my-agent --config ./custom-config.yaml
     """
 
     # Validate agent path exists
@@ -148,8 +148,8 @@ def deploy(
 
             # Update config to point to final location
             if config is not False:
-                from agentscale.utils.config_updater import update_agentscale_yaml
-                update_agentscale_yaml(
+                from agentscale.utils.config_updater import update_orpheus_yaml
+                update_orpheus_yaml(
                     build_result['agent_config'],
                     Path(final_path),
                     config,
@@ -178,7 +178,7 @@ def deploy(
             print(f"  Runtime: {build_result['runtime']}")
             print("")
             print("Ready to run:")
-            print(f"  echo '{{\"query\": \"test\"}}' | agentscale run {build_result['agent_name']}")
+            print(f"  echo '{{\"query\": \"test\"}}' | orpheus run {build_result['agent_name']}")
             print("")
 
     except DeployError as e:
@@ -215,7 +215,7 @@ def deploy_remote(build_result: dict, force: bool = False, verbose: bool = False
     if server_config.get("mode") != "tcp":
         print_error(
             "Active server is not a remote server",
-            "Use 'agentscale login' to configure a remote server"
+            "Use 'orpheus login' to configure a remote server"
         )
         raise typer.Exit(1)
 
@@ -269,7 +269,7 @@ def deploy_remote(build_result: dict, force: bool = False, verbose: bool = False
                 if response.status_code == 409:  # Conflict
                     print_error(
                         "Agent already exists on server",
-                        f"{error_msg}\n\nTo replace it, use:\n  agentscale undeploy {build_result['agent_name']}\n  Then retry deployment"
+                        f"{error_msg}\n\nTo replace it, use:\n  orpheus undeploy {build_result['agent_name']}\n  Then retry deployment"
                     )
                 else:
                     print_error("Deployment failed", error_msg)

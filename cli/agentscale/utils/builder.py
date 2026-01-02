@@ -111,7 +111,7 @@ def find_base_image(runtime: str, version: str) -> Path:
     Raises:
         ImageNotFoundError: If base image not found
     """
-    images_dir = Path.home() / ".agentscale" / "images"
+    images_dir = Path.home() / ".orpheus" / "images"
 
     # Determine image name based on runtime
     if runtime == "python3":
@@ -132,7 +132,7 @@ def find_base_image(runtime: str, version: str) -> Path:
         raise ImageNotFoundError(
             f"Base image not found: {base_path}\n\n"
             f"Please build it first:\n"
-            f"  cd agentscale\n"
+            f"  cd orpheus\n"
             f"  {build_script}\n"
         )
 
@@ -141,7 +141,7 @@ def find_base_image(runtime: str, version: str) -> Path:
         raise ImageNotFoundError(
             f"Incomplete base image (missing /lib): {base_path}\n\n"
             f"Rebuild with:\n"
-            f"  cd agentscale\n"
+            f"  cd orpheus\n"
             f"  {build_script}\n"
         )
 
@@ -170,7 +170,7 @@ def create_agent_image_dir(agent_name: str, force: bool = False, temp: bool = Fa
         # Remote build: use temporary directory
         import tempfile
         import uuid
-        temp_base = Path(tempfile.gettempdir()) / ".agentscale-build"
+        temp_base = Path(tempfile.gettempdir()) / ".orpheus-build"
         temp_base.mkdir(parents=True, exist_ok=True)
         temp_dir = temp_base / f"{agent_name}-{uuid.uuid4().hex[:8]}"
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -179,7 +179,7 @@ def create_agent_image_dir(agent_name: str, force: bool = False, temp: bool = Fa
         return temp_dir
 
     # Local build: use final location
-    agents_dir = Path.home() / ".agentscale" / "agents"
+    agents_dir = Path.home() / ".orpheus" / "agents"
     agent_dir = agents_dir / agent_name
 
     # Check if already deployed
@@ -243,7 +243,7 @@ def build_agent_image(
         agent_path: Path to agent directory
         force: Overwrite existing deployment
         no_cache: Don't use pip cache
-        config_path: Path to agentscale.yaml
+        config_path: Path to orpheus.yaml
         temp: Build in temporary location (for remote deployments)
 
     Returns:
@@ -337,15 +337,15 @@ def build_agent_image(
         print(f"[deploy] ✓ Manifest created")
         print("")
 
-    # Step 8: Update agentscale.yaml (skip for temp builds - will update after finalization)
-    if not config_path and not os.path.exists("agentscale.yaml"):
+    # Step 8: Update orpheus.yaml (skip for temp builds - will update after finalization)
+    if not config_path and not os.path.exists("orpheus.yaml"):
         config_path = None  # Will handle in config_updater
 
     if not temp and config_path is not False:  # Skip config update for temp builds
         if verbose:
-            print("[deploy] Updating agentscale.yaml...")
-        from agentscale.utils.config_updater import update_agentscale_yaml
-        update_agentscale_yaml(agent_config, agent_image_dir, config_path, verbose=verbose)
+            print("[deploy] Updating orpheus.yaml...")
+        from agentscale.utils.config_updater import update_orpheus_yaml
+        update_orpheus_yaml(agent_config, agent_image_dir, config_path, verbose=verbose)
         if verbose:
             print(f"[deploy] ✓ Configuration updated")
 
@@ -383,7 +383,7 @@ def finalize_agent_image(temp_image_path: str, agent_name: str, force: bool = Fa
         raise DeployError(f"Temporary build not found: {temp_image_path}")
 
     # Determine final location
-    agents_dir = Path.home() / ".agentscale" / "agents"
+    agents_dir = Path.home() / ".orpheus" / "agents"
     final_path = agents_dir / agent_name
 
     # Check if final location already exists
@@ -418,7 +418,7 @@ def cleanup_temp_build(temp_image_path: str, verbose: bool = False) -> None:
         verbose: Show progress
     """
     temp_path = Path(temp_image_path)
-    if temp_path.exists() and ".agentscale-build" in str(temp_path):
+    if temp_path.exists() and ".orpheus-build" in str(temp_path):
         try:
             shutil.rmtree(temp_path)
             if verbose:

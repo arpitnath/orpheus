@@ -21,8 +21,8 @@ def list_agents(
     Use --images to show base images instead.
 
     Examples:
-        agentscale list            # List deployed agents
-        agentscale list --images   # List base images
+        orpheus list            # List deployed agents
+        orpheus list --images   # List base images
     """
     if images:
         show_base_images()
@@ -39,13 +39,13 @@ def list_agents(
 
 def show_local_agents() -> None:
     """Display locally deployed agents."""
-    agents_dir = Path.home() / ".agentscale" / "agents"
+    agents_dir = Path.home() / ".orpheus" / "agents"
 
     if not agents_dir.exists():
         print_info("No agents deployed yet")
         print("")
         print("Deploy an agent with:")
-        print("  agentscale deploy <agent-path>")
+        print("  orpheus deploy <agent-path>")
         return
 
     agents = []
@@ -118,7 +118,7 @@ def show_remote_agents(server_config: Dict) -> None:
             print_info("No agents deployed yet")
             print("")
             print("Deploy an agent with:")
-            print("  agentscale deploy <agent-path> --remote")
+            print("  orpheus deploy <agent-path> --remote")
             return
 
         # Transform API data to display format
@@ -169,7 +169,7 @@ def show_remote_agents(server_config: Dict) -> None:
 
 def show_base_images() -> None:
     """Display base images in a table."""
-    images_dir = Path.home() / ".agentscale" / "images"
+    images_dir = Path.home() / ".orpheus" / "images"
 
     if not images_dir.exists():
         print_info("No base images found")

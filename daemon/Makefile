@@ -1,4 +1,4 @@
-.PHONY: all build build-runtime build-daemon build-daemon-linux-arm64 build-daemon-linux-amd64 build-daemon-all build-cli test test-go test-integration clean install dev-setup
+.PHONY: all build build-runtime build-daemon build-daemon-linux-arm64 build-daemon-linux-amd64 build-daemon-all build-cli test test-go test-integration clean install install-vm dev-setup
 
 # Variables
 BINARY_NAME=orpheus-runtime
@@ -68,6 +68,15 @@ install: build
 	@cp bin/$(BINARY_NAME) ~/.orpheus/bin/
 	@cd cli && pip install .
 	@echo "Installed to ~/.orpheus/bin/"
+
+# Install binaries in Lima VM (for macOS development)
+install-vm: build-daemon-linux-arm64
+	@echo "Installing binaries in Lima VM..."
+	@limactl copy bin/$(DAEMON_BINARY)-linux-arm64 orpheus:/tmp/orpheusd
+	@limactl shell orpheus sudo mv /tmp/orpheusd /usr/local/bin/orpheusd
+	@limactl shell orpheus sudo chmod +x /usr/local/bin/orpheusd
+	@echo "✓ orpheusd installed in VM"
+	@limactl shell orpheus /usr/local/bin/orpheusd --version
 
 # Development setup
 dev-setup:

@@ -51,7 +51,7 @@ def run_via_daemon(
         if mode == "unix_socket":
             print_error(
                 "Cannot connect to daemon",
-                "Start daemon with: agentscale vm start (macOS) or agentscale daemon start (Linux)"
+                "Start daemon with: orpheus vm start (macOS) or orpheus daemon start (Linux)"
             )
         else:
             url = server_config.get("url", "unknown")
@@ -73,11 +73,11 @@ def run(
     """Run an agent via the daemon.
 
     Automatically connects to active server (local or remote).
-    Use 'agentscale login' to configure remote servers.
+    Use 'orpheus login' to configure remote servers.
 
     Examples:
-        echo '{"query": "hello"}' | agentscale run ./my-agent
-        agentscale run ./my-agent --memory 512 --timeout 60
+        echo '{"query": "hello"}' | orpheus run ./my-agent
+        orpheus run ./my-agent --memory 512 --timeout 60
     """
     # Read stdin
     input_data = {}

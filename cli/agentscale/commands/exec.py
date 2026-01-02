@@ -16,14 +16,14 @@ def exec_command(
     Useful for debugging and inspection without opening an interactive shell.
 
     Examples:
-        agentscale exec "runc list"
-        agentscale exec "ps aux | grep python"
-        agentscale exec "cat /var/log/agentscale-daemon.log | tail -20"
+        orpheus exec "runc list"
+        orpheus exec "ps aux | grep python"
+        orpheus exec "cat /var/log/orpheusd.log | tail -20"
     """
     if sys.platform == "darwin":
         # macOS: Execute in Lima VM
         result = subprocess.run(
-            ["limactl", "shell", "agentscale", "--", "sudo", "bash", "-c", command],
+            ["limactl", "shell", "orpheus", "--", "sudo", "bash", "-c", command],
             text=True
         )
         raise typer.Exit(result.returncode)

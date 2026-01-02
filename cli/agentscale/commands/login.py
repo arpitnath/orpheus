@@ -14,12 +14,12 @@ def login(
 ) -> None:
     """Authenticate to a remote AgentScale server.
 
-    Saves server configuration to ~/.agentscale/config.yaml and tests connection.
+    Saves server configuration to ~/.orpheus/config.yaml and tests connection.
 
     Examples:
-        agentscale login
-        agentscale login --server https://agents.company.com --key agsk_abc123
-        agentscale login --name staging --server https://staging.company.com
+        orpheus login
+        orpheus login --server https://agents.company.com --key agsk_abc123
+        orpheus login --name staging --server https://staging.company.com
     """
     print_info(f"Authenticating to {server_url}...")
 
@@ -65,8 +65,8 @@ def login(
         print_success(f"✓ Active server set to '{server_name}'")
         print("")
         print("You can now use:")
-        print(f"  agentscale run ./my-agent")
-        print(f"  agentscale deploy ./my-agent --remote")
+        print(f"  orpheus run ./my-agent")
+        print(f"  orpheus deploy ./my-agent --remote")
         print("")
 
     except Exception as e:

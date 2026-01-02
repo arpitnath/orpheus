@@ -19,18 +19,18 @@ def inspect(
     for the specified agent.
 
     Examples:
-        agentscale inspect calculator-agent
-        agentscale inspect calculator-agent --format json
-        agentscale inspect calculator-agent --format yaml
+        orpheus inspect calculator-agent
+        orpheus inspect calculator-agent --format json
+        orpheus inspect calculator-agent --format yaml
     """
     # Find agent directory
-    agents_dir = Path.home() / ".agentscale" / "agents"
+    agents_dir = Path.home() / ".orpheus" / "agents"
     agent_dir = agents_dir / agent_name
 
     if not agent_dir.exists():
         print_error(
             f"Agent '{agent_name}' not found",
-            f"List deployed agents with: agentscale list"
+            f"List deployed agents with: orpheus list"
         )
         raise typer.Exit(1)
 

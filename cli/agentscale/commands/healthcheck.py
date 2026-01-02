@@ -18,8 +18,8 @@ def health(
     and disk space. Optionally attempts to fix common issues.
 
     Examples:
-        agentscale health
-        agentscale health --fix
+        orpheus health
+        orpheus health --fix
     """
     print_info("AgentScale Health Check")
     print("")
@@ -119,9 +119,9 @@ def check_vm_or_daemon() -> dict:
                 text=True
             )
 
-            if "agentscale" in result.stdout and "Running" in result.stdout:
+            if "orpheus" in result.stdout and "Running" in result.stdout:
                 return {"status": "pass", "component": "VM Status", "message": "Running (Ubuntu 24.04)"}
-            elif "agentscale" in result.stdout:
+            elif "orpheus" in result.stdout:
                 return {"status": "fail", "component": "VM Status", "message": "Not running"}
             else:
                 return {"status": "fail", "component": "VM Status", "message": "Not created"}
@@ -131,7 +131,7 @@ def check_vm_or_daemon() -> dict:
         # Linux - check if daemon process is running
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "agentscale-daemon"],
+                ["pgrep", "-f", "orpheusd"],
                 capture_output=True
             )
 
@@ -146,9 +146,9 @@ def check_vm_or_daemon() -> dict:
 def check_socket() -> dict:
     """Check if socket is accessible."""
     if sys.platform == "darwin":
-        socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+        socket_path = Path.home() / ".lima" / "orpheus" / "sock" / "orpheus.sock"
     else:
-        socket_path = Path("/var/run/agentscale.sock")
+        socket_path = Path("/var/run/orpheus.sock")
 
     if socket_path.exists():
         return {"status": "pass", "component": "Socket", "message": "Accessible"}
@@ -163,9 +163,9 @@ def check_daemon_health() -> dict:
     # Try 1: Unix socket (direct, no auth needed)
     try:
         if sys.platform == "darwin":
-            socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+            socket_path = Path.home() / ".lima" / "orpheus" / "sock" / "orpheus.sock"
         else:
-            socket_path = Path("/var/run/agentscale.sock")
+            socket_path = Path("/var/run/orpheus.sock")
 
         transport = httpx.HTTPTransport(uds=str(socket_path))
         with httpx.Client(transport=transport, timeout=3) as client:
@@ -194,7 +194,7 @@ def check_daemon_health() -> dict:
 
 def check_base_images() -> dict:
     """Check if base images exist."""
-    images_dir = Path.home() / ".agentscale" / "images"
+    images_dir = Path.home() / ".orpheus" / "images"
 
     if not images_dir.exists():
         return {"status": "fail", "component": "Base Images", "message": "No images directory"}
@@ -212,7 +212,7 @@ def check_base_images() -> dict:
 
 def check_deployed_agents() -> dict:
     """Check deployed agents."""
-    agents_dir = Path.home() / ".agentscale" / "agents"
+    agents_dir = Path.home() / ".orpheus" / "agents"
 
     if not agents_dir.exists():
         return {"status": "warn", "component": "Deployed Agents", "message": "None deployed"}

@@ -17,16 +17,16 @@ def status() -> None:
     VM status (on macOS), deployed agents, and base images.
 
     Examples:
-        agentscale status
+        orpheus status
     """
     print_info("AgentScale System Status")
     print("")
 
     # Get socket path
     if sys.platform == "darwin":
-        socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+        socket_path = Path.home() / ".lima" / "orpheus" / "sock" / "orpheus.sock"
     else:
-        socket_path = Path("/var/run/agentscale.sock")
+        socket_path = Path("/var/run/orpheus.sock")
 
     # Check daemon health
     daemon_status = check_daemon_health(socket_path)
@@ -94,7 +94,7 @@ def check_vm_status() -> str:
 
         vms = json.loads(result.stdout)
         for vm in vms:
-            if vm["name"] == "agentscale":
+            if vm["name"] == "orpheus":
                 status = vm["status"]
                 arch = vm.get("arch", "unknown")
                 cpus = vm.get("cpus", 0)
@@ -112,7 +112,7 @@ def check_vm_status() -> str:
 
 def count_deployed_agents() -> int:
     """Count deployed agents."""
-    agents_dir = Path.home() / ".agentscale" / "agents"
+    agents_dir = Path.home() / ".orpheus" / "agents"
     if not agents_dir.exists():
         return 0
 
@@ -126,7 +126,7 @@ def count_deployed_agents() -> int:
 
 def count_base_images() -> int:
     """Count base images."""
-    images_dir = Path.home() / ".agentscale" / "images"
+    images_dir = Path.home() / ".orpheus" / "images"
     if not images_dir.exists():
         return 0
 

@@ -18,11 +18,11 @@ def invoke(
 ) -> None:
     """Invoke an agent on a running AgentScale server.
 
-    Uses the active server from ~/.agentscale/config.yaml
+    Uses the active server from ~/.orpheus/config.yaml
 
     Examples:
-        agentscale invoke planning-agent '{"query": "test"}'
-        agentscale invoke simple-agent '{"input": "hello"}'
+        orpheus invoke planning-agent '{"query": "test"}'
+        orpheus invoke simple-agent '{"input": "hello"}'
     """
 
     # Parse input (accept raw string or JSON)
@@ -75,11 +75,11 @@ def stats(
 ) -> None:
     """Get server statistics for one or all agents.
 
-    Uses the active server from ~/.agentscale/config.yaml
+    Uses the active server from ~/.orpheus/config.yaml
 
     Examples:
-        agentscale stats                    # All agents
-        agentscale stats calculator-test    # Specific agent
+        orpheus stats                    # All agents
+        orpheus stats calculator-test    # Specific agent
     """
 
     if agent_id:
@@ -115,7 +115,7 @@ def stats(
 def health() -> None:
     """Check server health.
 
-    Uses the active server from ~/.agentscale/config.yaml
+    Uses the active server from ~/.orpheus/config.yaml
     """
 
     url = "/v1/health"

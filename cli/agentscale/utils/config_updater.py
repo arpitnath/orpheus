@@ -1,4 +1,4 @@
-"""agentscale.yaml configuration updater."""
+"""orpheus.yaml configuration updater."""
 
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -11,18 +11,18 @@ class ConfigUpdateError(Exception):
     pass
 
 
-def update_agentscale_yaml(
+def update_orpheus_yaml(
     agent_config: Dict[str, Any],
     agent_image_dir: Path,
     config_path: Optional[str] = None,
     verbose: bool = False
 ) -> None:
-    """Add or update agent entry in agentscale.yaml.
+    """Add or update agent entry in orpheus.yaml.
 
     Args:
         agent_config: Agent configuration dict
         agent_image_dir: Path to deployed agent image
-        config_path: Path to agentscale.yaml (optional)
+        config_path: Path to orpheus.yaml (optional)
 
     Raises:
         ConfigUpdateError: If update fails
@@ -32,10 +32,10 @@ def update_agentscale_yaml(
         yaml_path = Path(config_path)
     else:
         # Look in current directory first
-        yaml_path = Path("agentscale.yaml")
+        yaml_path = Path("orpheus.yaml")
         if not yaml_path.exists():
-            # Look in ~/.agentscale/
-            home_config = Path.home() / ".agentscale" / "agentscale.yaml"
+            # Look in ~/.orpheus/
+            home_config = Path.home() / ".orpheus" / "orpheus.yaml"
             if home_config.exists():
                 yaml_path = home_config
             # If neither exists, create in current directory
@@ -85,7 +85,7 @@ def update_agentscale_yaml(
 
 
 def create_default_config() -> Dict[str, Any]:
-    """Create default agentscale.yaml structure.
+    """Create default orpheus.yaml structure.
 
     Returns:
         Default configuration dictionary

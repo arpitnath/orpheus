@@ -17,20 +17,20 @@ def ps(
     including stopped ones.
 
     Examples:
-        agentscale ps      # Running containers
-        agentscale ps -a   # All containers
+        orpheus ps      # Running containers
+        orpheus ps -a   # All containers
     """
     # Get socket path
     if sys.platform == "darwin":
-        socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+        socket_path = Path.home() / ".lima" / "orpheus" / "sock" / "orpheus.sock"
     else:
-        socket_path = Path("/var/run/agentscale.sock")
+        socket_path = Path("/var/run/orpheus.sock")
 
     # Check if daemon is running
     if not socket_path.exists():
         print_error(
             "Daemon not running",
-            "Start with: agentscale vm start" if sys.platform == "darwin" else "agentscale daemon start"
+            "Start with: orpheus vm start" if sys.platform == "darwin" else "orpheus daemon start"
         )
         raise typer.Exit(1)
 

@@ -54,7 +54,7 @@ def start(
         print_info("VM not running. Starting VM...")
         try:
             subprocess.run(
-                ["agentscale", "vm", "start"],
+                ["orpheus", "vm", "start"],
                 check=True,
                 timeout=SERVER_START_TIMEOUT,
             )
@@ -69,7 +69,7 @@ def start(
     print_info("Stopping existing daemon...")
     try:
         subprocess.run(
-            ["limactl", "shell", "agentscale", "sudo", "pkill", "-f", "agentscale-daemon"],
+            ["limactl", "shell", "orpheus", "sudo", "pkill", "-f", "orpheusd"],
             capture_output=True,
             check=False,
             timeout=SERVER_COMMAND_TIMEOUT,
@@ -84,7 +84,7 @@ def start(
 
     # Create directory and set permissions
     subprocess.run(
-        ["limactl", "shell", "agentscale", "sudo", "mkdir", "-p", "/root/.agentscale"],
+        ["limactl", "shell", "orpheus", "sudo", "mkdir", "-p", "/root/.orpheus"],
         check=True,
         capture_output=True,
         timeout=SERVER_COMMAND_TIMEOUT,
@@ -92,7 +92,7 @@ def start(
 
     # Remove old database if exists
     subprocess.run(
-        ["limactl", "shell", "agentscale", "sudo", "rm", "-f", "/root/.agentscale/keys.db"],
+        ["limactl", "shell", "orpheus", "sudo", "rm", "-f", "/root/.orpheus/keys.db"],
         check=False,
         capture_output=True,
         timeout=SERVER_COMMAND_TIMEOUT,
@@ -102,9 +102,9 @@ def start(
 
     # Step 3: Start daemon in TCP mode (FIXED: proper shell nesting for redirection)
     print_info(f"Starting daemon on TCP port {port}...")
-    cmd = f"/usr/local/bin/agentscale-daemon --tcp-bind :{port} > /var/log/agentscale-daemon.log 2>&1 & echo $!"
+    cmd = f"/usr/local/bin/orpheusd --tcp-bind :{port} > /var/log/orpheusd.log 2>&1 & echo $!"
     result = subprocess.run(
-        ["limactl", "shell", "agentscale", "sudo", "bash", "-c", cmd],
+        ["limactl", "shell", "orpheus", "sudo", "bash", "-c", cmd],
         capture_output=True,
         text=True,
         timeout=SERVER_COMMAND_TIMEOUT,
@@ -131,8 +131,8 @@ def start(
         try:
             # Check health via Unix socket (doesn't require auth, but needs sudo for socket access)
             health_check = subprocess.run(
-                ["limactl", "shell", "agentscale", "--",
-                 "sudo", "curl", "-s", "--unix-socket", "/var/run/agentscale.sock",
+                ["limactl", "shell", "orpheus", "--",
+                 "sudo", "curl", "-s", "--unix-socket", "/var/run/orpheus.sock",
                  "http://localhost/v1/health"],
                 capture_output=True,
                 text=True,
@@ -148,7 +148,7 @@ def start(
 
                         # Also check logs for debugging (non-fatal if missing)
                         log_check = subprocess.run(
-                            ["limactl", "shell", "agentscale", "sudo", "tail", "-5", "/var/log/agentscale-daemon.log"],
+                            ["limactl", "shell", "orpheus", "sudo", "tail", "-5", "/var/log/orpheusd.log"],
                             capture_output=True,
                             text=True,
                             timeout=5,
@@ -173,7 +173,7 @@ def start(
         print_error(f"Last error: {last_error}")
         print("")
         print("Check daemon logs:")
-        print(f"  limactl shell agentscale sudo tail -20 /var/log/agentscale-daemon.log")
+        print(f"  limactl shell orpheus sudo tail -20 /var/log/orpheusd.log")
         raise typer.Exit(1)
 
     # Step 5: List or create API keys
@@ -181,7 +181,7 @@ def start(
     print_info("Checking API keys...")
 
     result = subprocess.run(
-        ["limactl", "shell", "agentscale", "sudo", "/usr/local/bin/agentscale-daemon", "list-keys"],
+        ["limactl", "shell", "orpheus", "sudo", "/usr/local/bin/orpheusd", "list-keys"],
         capture_output=True,
         text=True,
         timeout=SERVER_COMMAND_TIMEOUT,
@@ -191,7 +191,7 @@ def start(
         if create_key:
             print_info("No API keys found. Creating one...")
             result = subprocess.run(
-                ["limactl", "shell", "agentscale", "sudo", "/usr/local/bin/agentscale-daemon",
+                ["limactl", "shell", "orpheus", "sudo", "/usr/local/bin/orpheusd",
                  "create-key", "--name", "default", "--rpm", "100"],
                 capture_output=True,
                 text=True,
@@ -209,8 +209,8 @@ def start(
                     print("")
                     print("Next steps:")
                     print(f"  1. Set API key:    export API_KEY={api_key}")
-                    print(f"  2. Configure CLI:  agentscale login --server http://localhost:{port} --auth-key $API_KEY")
-                    print(f"  3. Deploy agents:  agentscale deploy . --remote")
+                    print(f"  2. Configure CLI:  orpheus login --server http://localhost:{port} --auth-key $API_KEY")
+                    print(f"  3. Deploy agents:  orpheus deploy . --remote")
                     print("")
                     return
         else:
@@ -224,8 +224,8 @@ def start(
         print("Next steps:")
         print(f"  1. Copy an API key from above")
         print(f"  2. export API_KEY=agsk_your_key_here")
-        print(f"  3. agentscale login --server http://localhost:{port} --auth-key $API_KEY")
-        print(f"  4. agentscale deploy . --remote")
+        print(f"  3. orpheus login --server http://localhost:{port} --auth-key $API_KEY")
+        print(f"  4. orpheus deploy . --remote")
         print("")
 
 
@@ -239,7 +239,7 @@ def stop():
     print_info("Stopping AgentScale server...")
 
     subprocess.run(
-        ["limactl", "shell", "agentscale", "sudo", "pkill", "-f", "agentscale-daemon"],
+        ["limactl", "shell", "orpheus", "sudo", "pkill", "-f", "orpheusd"],
         capture_output=True,
         check=False,
     )
@@ -255,12 +255,12 @@ def status():
         raise typer.Exit(1)
 
     result = subprocess.run(
-        ["limactl", "shell", "agentscale", "ps", "aux"],
+        ["limactl", "shell", "orpheus", "ps", "aux"],
         capture_output=True,
         text=True,
     )
 
-    daemon_procs = [line for line in result.stdout.split('\n') if 'agentscale-daemon' in line and 'grep' not in line]
+    daemon_procs = [line for line in result.stdout.split('\n') if 'orpheusd' in line and 'grep' not in line]
 
     if daemon_procs:
         print_success("Server is running")
@@ -274,4 +274,4 @@ def status():
     else:
         print_info("Server is not running")
         print("")
-        print("Start with: agentscale server start")
+        print("Start with: orpheus server start")

@@ -23,10 +23,10 @@ def runs(
     Parses daemon logs to extract execution history.
 
     Examples:
-        agentscale runs                      # Last 20 runs
-        agentscale runs --agent calculator   # Runs for specific agent
-        agentscale runs --status error       # Failed runs only
-        agentscale runs abc123               # Details for specific run
+        orpheus runs                      # Last 20 runs
+        orpheus runs --agent calculator   # Runs for specific agent
+        orpheus runs --status error       # Failed runs only
+        orpheus runs abc123               # Details for specific run
     """
     # Get logs
     log_lines = get_daemon_logs()
@@ -80,7 +80,7 @@ def get_daemon_logs() -> List[str]:
     try:
         if sys.platform == "darwin":
             result = subprocess.run(
-                ["limactl", "shell", "agentscale", "--", "sudo", "cat", "/var/log/agentscale-daemon.log"],
+                ["limactl", "shell", "orpheus", "--", "sudo", "cat", "/var/log/orpheusd.log"],
                 capture_output=True,
                 text=True,
                 check=True
@@ -89,7 +89,7 @@ def get_daemon_logs() -> List[str]:
         else:
             # Try journalctl first
             result = subprocess.run(
-                ["journalctl", "-u", "agentscale-daemon", "-n", "1000", "--no-pager"],
+                ["journalctl", "-u", "orpheusd", "-n", "1000", "--no-pager"],
                 capture_output=True,
                 text=True
             )
@@ -97,7 +97,7 @@ def get_daemon_logs() -> List[str]:
                 return result.stdout.strip().split("\n")
 
             # Fall back to file
-            log_file = Path("/var/log/agentscale-daemon.log")
+            log_file = Path("/var/log/orpheusd.log")
             if log_file.exists():
                 return log_file.read_text().strip().split("\n")
 
@@ -172,4 +172,4 @@ def show_run_details(run_id: str, runs: List[Dict]) -> None:
     print_info(f"Run details not yet implemented for: {run_id}")
     print("")
     print("For now, use:")
-    print("  agentscale logs --grep <agent-name>")
+    print("  orpheus logs --grep <agent-name>")

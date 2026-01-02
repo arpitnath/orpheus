@@ -20,31 +20,31 @@ def test(
     Similar to invoke but with more diagnostic information.
 
     Examples:
-        agentscale test calculator-agent '{"query": "test"}'
-        agentscale test calculator-agent '{"query": "What is 5+3?"}' --verbose
+        orpheus test calculator-agent '{"query": "test"}'
+        orpheus test calculator-agent '{"query": "What is 5+3?"}' --verbose
     """
     # Get socket path
     if sys.platform == "darwin":
-        socket_path = Path.home() / ".lima" / "agentscale" / "sock" / "agentscale.sock"
+        socket_path = Path.home() / ".lima" / "orpheus" / "sock" / "orpheus.sock"
     else:
-        socket_path = Path("/var/run/agentscale.sock")
+        socket_path = Path("/var/run/orpheus.sock")
 
     # Check socket exists
     if not socket_path.exists():
         print_error(
             "Daemon not running",
-            "Start with: agentscale vm start" if sys.platform == "darwin" else "agentscale daemon start"
+            "Start with: orpheus vm start" if sys.platform == "darwin" else "orpheus daemon start"
         )
         raise typer.Exit(1)
 
     # Find agent
-    agents_dir = Path.home() / ".agentscale" / "agents"
+    agents_dir = Path.home() / ".orpheus" / "agents"
     agent_dir = agents_dir / agent_name
 
     if not agent_dir.exists():
         print_error(
             f"Agent '{agent_name}' not found",
-            "List agents with: agentscale list"
+            "List agents with: orpheus list"
         )
         raise typer.Exit(1)
 
@@ -135,7 +135,7 @@ def test(
     except httpx.ConnectError:
         print_error(
             "Cannot connect to daemon",
-            "Start with: agentscale vm start" if sys.platform == "darwin" else "agentscale daemon start"
+            "Start with: orpheus vm start" if sys.platform == "darwin" else "orpheus daemon start"
         )
         raise typer.Exit(1)
     except httpx.TimeoutException:

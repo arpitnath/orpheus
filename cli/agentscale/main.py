@@ -24,7 +24,7 @@ from agentscale.commands import daemon
 from agentscale.commands import server
 
 app = typer.Typer(
-    name="agentscale",
+    name="orpheus",
     help="AgentScale - Infrastructure for AI agents",
     add_completion=False,
 )
@@ -33,7 +33,7 @@ app = typer.Typer(
 def version_callback(value: bool) -> None:
     """Print version and exit."""
     if value:
-        print(f"agentscale {__version__}")
+        print(f"orpheus {__version__}")
         raise typer.Exit()
 
 

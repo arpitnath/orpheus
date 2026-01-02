@@ -19,10 +19,10 @@ def logs(
     On macOS, reads from Lima VM. On Linux, reads from local logs.
 
     Examples:
-        agentscale logs              # Last 50 lines
-        agentscale logs -f           # Follow in real-time
-        agentscale logs -n 100       # Last 100 lines
-        agentscale logs --grep error # Filter for errors
+        orpheus logs              # Last 50 lines
+        orpheus logs -f           # Follow in real-time
+        orpheus logs -n 100       # Last 100 lines
+        orpheus logs --grep error # Filter for errors
     """
     if sys.platform == "darwin":
         view_logs_macos(follow, tail, grep)
@@ -34,9 +34,9 @@ def view_logs_macos(follow: bool, tail: int, grep: Optional[str]) -> None:
     """View logs from Lima VM (macOS)."""
     # Build command
     if follow:
-        cmd = "sudo tail -f /var/log/agentscale-daemon.log"
+        cmd = "sudo tail -f /var/log/orpheusd.log"
     else:
-        cmd = f"sudo tail -n {tail} /var/log/agentscale-daemon.log"
+        cmd = f"sudo tail -n {tail} /var/log/orpheusd.log"
 
     if grep:
         cmd += f" | grep --color=auto -i '{grep}'"
@@ -44,7 +44,7 @@ def view_logs_macos(follow: bool, tail: int, grep: Optional[str]) -> None:
     # Execute in VM
     try:
         subprocess.run(
-            ["limactl", "shell", "agentscale", "--", "bash", "-c", cmd]
+            ["limactl", "shell", "orpheus", "--", "bash", "-c", cmd]
         )
     except KeyboardInterrupt:
         print("")
@@ -60,13 +60,13 @@ def view_logs_linux(follow: bool, tail: int, grep: Optional[str]) -> None:
     try:
         # Check if using systemd
         systemd_check = subprocess.run(
-            ["systemctl", "is-active", "agentscale-daemon"],
+            ["systemctl", "is-active", "orpheusd"],
             capture_output=True
         )
 
         if systemd_check.returncode == 0:
             # Using systemd - use journalctl
-            cmd = ["journalctl", "-u", "agentscale-daemon", "-n", str(tail)]
+            cmd = ["journalctl", "-u", "orpheusd", "-n", str(tail)]
 
             if follow:
                 cmd.append("-f")
@@ -80,9 +80,9 @@ def view_logs_linux(follow: bool, tail: int, grep: Optional[str]) -> None:
         else:
             # Not using systemd - read from file
             if follow:
-                cmd = ["tail", "-f", "-n", str(tail), "/var/log/agentscale-daemon.log"]
+                cmd = ["tail", "-f", "-n", str(tail), "/var/log/orpheusd.log"]
             else:
-                cmd = ["tail", "-n", str(tail), "/var/log/agentscale-daemon.log"]
+                cmd = ["tail", "-n", str(tail), "/var/log/orpheusd.log"]
 
             if grep:
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)

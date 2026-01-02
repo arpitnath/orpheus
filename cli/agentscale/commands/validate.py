@@ -16,8 +16,8 @@ def validate(
     to catch errors before deploying.
 
     Examples:
-        agentscale validate ./my-agent
-        agentscale validate ../calculator-agent
+        orpheus validate ./my-agent
+        orpheus validate ../calculator-agent
     """
     agent_dir = Path(agent_path)
 
@@ -119,5 +119,5 @@ def validate(
     print_success("Agent is ready to deploy!")
     print("")
     print("Deploy with:")
-    print(f"  agentscale deploy {agent_path}")
+    print(f"  orpheus deploy {agent_path}")
     print("")

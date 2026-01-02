@@ -13,22 +13,22 @@ from agentscale.utils.output import print_error, print_success, print_info
 
 app = typer.Typer(
     name="daemon",
-    help="Manage the agentscale daemon (Linux only)",
+    help="Manage the orpheus daemon (Linux only)",
 )
 
-DEFAULT_SOCKET = "/var/run/agentscale.sock"
-PID_FILE = "/var/run/agentscale.pid"
+DEFAULT_SOCKET = "/var/run/orpheus.sock"
+PID_FILE = "/var/run/orpheus.pid"
 
 
 def find_daemon_binary() -> Optional[Path]:
-    """Find the agentscale-daemon binary."""
+    """Find the orpheusd binary."""
     locations = [
         # Relative to CLI package (development)
-        Path(__file__).parent.parent.parent.parent / "bin" / "agentscale-daemon",
-        # ~/.agentscale/bin (installed)
-        Path.home() / ".agentscale" / "bin" / "agentscale-daemon",
+        Path(__file__).parent.parent.parent.parent / "bin" / "orpheusd",
+        # ~/.orpheus/bin (installed)
+        Path.home() / ".orpheus" / "bin" / "orpheusd",
         # System PATH
-        "agentscale-daemon",
+        "orpheusd",
     ]
 
     for loc in locations:
@@ -69,13 +69,13 @@ def start(
     socket: str = typer.Option(DEFAULT_SOCKET, "--socket", "-s", help="Unix socket path"),
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground"),
 ) -> None:
-    """Start the agentscale daemon.
+    """Start the orpheus daemon.
 
-    On macOS, use 'agentscale vm start' instead (daemon runs inside Lima VM).
+    On macOS, use 'orpheus vm start' instead (daemon runs inside Lima VM).
     """
     if sys.platform == "darwin":
         print_error(
-            "Use 'agentscale vm start' on macOS",
+            "Use 'orpheus vm start' on macOS",
             "The daemon runs inside the Lima VM on macOS"
         )
         raise typer.Exit(1)
@@ -89,7 +89,7 @@ def start(
     daemon_binary = find_daemon_binary()
     if not daemon_binary:
         print_error(
-            "agentscale-daemon binary not found",
+            "orpheusd binary not found",
             "Install AgentScale or run 'make build-daemon'"
         )
         raise typer.Exit(1)
@@ -122,7 +122,7 @@ def start(
         except PermissionError:
             print_error(
                 "Permission denied",
-                f"Cannot write to {socket}. Try with sudo or use --socket /tmp/agentscale.sock"
+                f"Cannot write to {socket}. Try with sudo or use --socket /tmp/orpheus.sock"
             )
             raise typer.Exit(1)
         except Exception as e:
@@ -132,10 +132,10 @@ def start(
 
 @app.command()
 def stop() -> None:
-    """Stop the agentscale daemon."""
+    """Stop the orpheus daemon."""
     if sys.platform == "darwin":
         print_error(
-            "Use 'agentscale vm stop' on macOS",
+            "Use 'orpheus vm stop' on macOS",
             "The daemon runs inside the Lima VM on macOS"
         )
         raise typer.Exit(1)
@@ -163,7 +163,7 @@ def stop() -> None:
 def status() -> None:
     """Check daemon status."""
     if sys.platform == "darwin":
-        print_info("On macOS, use 'agentscale vm status'")
+        print_info("On macOS, use 'orpheus vm status'")
         return
 
     pid = get_daemon_pid()
@@ -178,4 +178,4 @@ def status() -> None:
             print_info("Socket: not found (daemon may be starting)")
     else:
         print_info("Daemon is not running")
-        print_info("Start with: agentscale daemon start")
+        print_info("Start with: orpheus daemon start")

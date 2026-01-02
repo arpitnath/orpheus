@@ -22,8 +22,8 @@ def undeploy(
     Also deletes local state and updates configuration.
 
     Examples:
-        agentscale undeploy calculator-agent
-        agentscale undeploy calculator-agent --force
+        orpheus undeploy calculator-agent
+        orpheus undeploy calculator-agent --force
     """
     # Detect server mode
     server_config = get_active_server()
@@ -35,7 +35,7 @@ def undeploy(
     active_server_name = config.get("active", "local")
 
     # Find agent directory
-    agents_dir = Path.home() / ".agentscale" / "agents"
+    agents_dir = Path.home() / ".orpheus" / "agents"
     agent_dir = agents_dir / agent_name
 
     # Get agent size if local state exists
@@ -96,17 +96,17 @@ def undeploy(
             # Local mode and no local state - this is an error
             print_error(
                 f"Agent '{agent_name}' not found",
-                "List deployed agents with: agentscale list"
+                "List deployed agents with: orpheus list"
             )
             raise typer.Exit(1)
         # Remote mode with no local state is OK (was deployed remotely only)
 
-    # Update agentscale.yaml
+    # Update orpheus.yaml
     try:
         remove_from_config(agent_name)
         print_success("✓ Configuration updated")
     except Exception as e:
-        print_warning("Failed to update agentscale.yaml", str(e))
+        print_warning("Failed to update orpheus.yaml", str(e))
 
     print("")
     if size_mb > 0:
@@ -165,8 +165,8 @@ def undeploy_from_remote(agent_name: str) -> bool:
 
 
 def remove_from_config(agent_name: str) -> None:
-    """Remove agent from agentscale.yaml."""
-    config_file = Path("agentscale.yaml")
+    """Remove agent from orpheus.yaml."""
+    config_file = Path("orpheus.yaml")
 
     if not config_file.exists():
         # No config file, nothing to update
