@@ -10,6 +10,7 @@ import type {
   DeployResponse,
   InvokeResponse,
   AgentListItem,
+  AgentDetails,
   OrpheusClient,
   DeployOptions,
 } from '../types/index.js';
@@ -171,6 +172,14 @@ export function createClient(_serverName?: string): OrpheusClient {
         serverConfig
       );
       return response.agents || [];
+    },
+
+    async inspect(agentName: string): Promise<AgentDetails> {
+      return makeRequest<AgentDetails>(
+        'GET',
+        `/v1/agents/${encodeURIComponent(agentName)}`,
+        serverConfig
+      );
     },
 
     close(): void {

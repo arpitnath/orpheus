@@ -107,6 +107,27 @@ export interface AgentListItem {
   deployed_at?: string;
 }
 
+export interface AgentDetails {
+  name: string;
+  runtime: string;
+  module: string;
+  entrypoint: string;
+  status: 'running' | 'idle' | 'stopped';
+  workers: number;
+  scaling?: {
+    min_workers: number;
+    max_workers: number;
+  };
+  endpoints: {
+    http: string;
+    mcp?: string;
+  };
+  deployed_at?: string;
+  env?: Record<string, string>;
+  memory_mb?: number;
+  timeout_seconds?: number;
+}
+
 export interface ContainerInfo {
   id: string;
   agent: string;
@@ -123,6 +144,7 @@ export interface OrpheusClient {
   invoke(agentName: string, input: unknown): Promise<InvokeResponse>;
   undeploy(agentName: string): Promise<{ success: boolean; message?: string }>;
   list(): Promise<AgentListItem[]>;
+  inspect(agentName: string): Promise<AgentDetails>;
   close(): void;
 }
 

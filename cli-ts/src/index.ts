@@ -8,7 +8,19 @@ import {
   getDefaultSocketPath,
   socketExists,
   listServers,
+  addServer,
+  removeServer,
+  setActiveServer,
 } from './lib/config.js';
+import {
+  checkMacOS,
+  checkLimaInstalled,
+  getVMStatus,
+  startVM,
+  stopVM,
+  deleteVM,
+  sshVM,
+} from './lib/vm.js';
 import { renderApp } from './lib/render.js';
 import { StatusDashboard } from './components/StatusDashboard.js';
 import { DeployProgress } from './components/DeployProgress.js';
@@ -163,9 +175,38 @@ program
 program
   .command('validate <path>')
   .description('Validate an agent.yaml file')
-  .action(async (path: string) => {
-    console.log(`Validating: ${path}`);
-    console.log('\n\x1b[33mValidate command not yet implemented\x1b[0m');
+  .action(async (agentPath: string) => {
+    const { validateAgentYaml } = await import('./lib/validate.js');
+    const result = validateAgentYaml(agentPath);
+
+    if (result.valid) {
+      console.log('\x1b[32m✓\x1b[0m Valid agent.yaml');
+      if (result.config) {
+        console.log(`  Name: ${result.config.name}`);
+        console.log(`  Runtime: ${result.config.runtime}`);
+        console.log(`  Module: ${result.config.module}`);
+        console.log(`  Entrypoint: ${result.config.entrypoint}`);
+        if (result.config.scaling) {
+          console.log(`  Scaling: ${result.config.scaling.min_workers}-${result.config.scaling.max_workers} workers`);
+        }
+      }
+    } else {
+      console.log('\x1b[31m✗\x1b[0m Invalid agent.yaml');
+      for (const error of result.errors) {
+        console.log(`  \x1b[31m•\x1b[0m ${error}`);
+      }
+    }
+
+    if (result.warnings.length > 0) {
+      console.log('\nWarnings:');
+      for (const warning of result.warnings) {
+        console.log(`  \x1b[33m•\x1b[0m ${warning}`);
+      }
+    }
+
+    if (!result.valid) {
+      process.exit(1);
+    }
   });
 
 //@OBSERVABILITY_COMMANDS
@@ -283,10 +324,40 @@ program
   .command('inspect <agent>')
   .description('Show agent details')
   .option('-f, --format <format>', 'Output format (json, yaml, text)', 'text')
-  .action(async (agent: string, options: { format?: string }) => {
-    console.log(`Inspecting agent: ${agent}`);
-    console.log('Format:', options.format);
-    console.log('\n\x1b[33mInspect command not yet implemented\x1b[0m');
+  .action(async (agentName: string, options: { format?: string }) => {
+    try {
+      const client = createClient();
+      const details = await client.inspect(agentName);
+
+      if (options.format === 'json') {
+        console.log(JSON.stringify(details, null, 2));
+        return;
+      }
+
+      // Text format (default)
+      console.log(`Agent: ${details.name}`);
+      console.log(`Runtime: ${details.runtime}`);
+      console.log(`Module: ${details.module}`);
+      console.log(`Entrypoint: ${details.entrypoint}`);
+
+      console.log('\nEndpoints:');
+      console.log(`  HTTP: ${details.endpoints.http}`);
+      if (details.endpoints.mcp) {
+        console.log(`  MCP:  ${details.endpoints.mcp}`);
+      }
+
+      console.log('\nScaling:');
+      console.log(`  Workers: ${details.workers}${details.scaling ? ` (min: ${details.scaling.min_workers}, max: ${details.scaling.max_workers})` : ''}`);
+
+      const statusColor = details.status === 'running' ? '\x1b[32m' : details.status === 'idle' ? '\x1b[33m' : '\x1b[31m';
+      console.log(`\nStatus: ${statusColor}${details.status}\x1b[0m`);
+      if (details.deployed_at) {
+        console.log(`Deployed: ${details.deployed_at}`);
+      }
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 program
@@ -309,10 +380,66 @@ program
   .command('healthcheck')
   .description('Run system health diagnostics')
   .option('--fix', 'Attempt to fix issues')
-  .action(async (options: { fix?: boolean }) => {
-    console.log('Running health checks...');
-    console.log('Fix mode:', options.fix);
-    console.log('\n\x1b[33mHealthcheck command not yet implemented\x1b[0m');
+  .action(async (_options: { fix?: boolean }) => {
+    console.log('Running health checks...\n');
+
+    let allPassed = true;
+    const { platform } = await import('node:os');
+    const { execSync } = await import('node:child_process');
+
+    // Check 1: Config exists
+    const configValid = socketExists() || getActiveServerName() !== 'local';
+    if (configValid) {
+      console.log('\x1b[32m✓\x1b[0m Config valid');
+    } else {
+      console.log('\x1b[33m!\x1b[0m Config: using defaults');
+    }
+
+    // Check 2: Daemon reachable
+    const connected = await testConnection();
+    if (connected) {
+      console.log('\x1b[32m✓\x1b[0m Daemon reachable');
+    } else {
+      console.log('\x1b[31m✗\x1b[0m Daemon not reachable');
+      allPassed = false;
+    }
+
+    // Check 3: Daemon health
+    if (connected) {
+      const health = await getHealth();
+      if (health && health.status === 'healthy') {
+        console.log(`\x1b[32m✓\x1b[0m Daemon healthy (uptime: ${formatUptime(health.uptime_seconds)})`);
+      } else if (health) {
+        console.log(`\x1b[33m!\x1b[0m Daemon ${health.status}`);
+      }
+    }
+
+    // Check 4: Lima VM (macOS only)
+    if (platform() === 'darwin') {
+      try {
+        const output = execSync('limactl list --json 2>/dev/null', { encoding: 'utf-8' });
+        const parsed = JSON.parse(output);
+        const vms = Array.isArray(parsed) ? parsed : [parsed];
+        const orpheusVm = vms.find((vm: { name: string }) => vm.name === 'orpheus');
+        if (orpheusVm && orpheusVm.status === 'Running') {
+          console.log('\x1b[32m✓\x1b[0m Lima VM running');
+        } else if (orpheusVm) {
+          console.log(`\x1b[33m!\x1b[0m Lima VM ${orpheusVm.status.toLowerCase()}`);
+        } else {
+          console.log('\x1b[33m!\x1b[0m Lima VM not found');
+        }
+      } catch {
+        console.log('\x1b[33m!\x1b[0m Lima not installed or not configured');
+      }
+    }
+
+    console.log('');
+    if (allPassed) {
+      console.log('\x1b[32mAll checks passed!\x1b[0m');
+    } else {
+      console.log('\x1b[31mSome checks failed\x1b[0m');
+      process.exit(1);
+    }
   });
 
 //@UTILITY_COMMANDS
@@ -344,9 +471,12 @@ program
     console.log('\n\x1b[33mExec command not yet implemented\x1b[0m');
   });
 
-program
-  .command('login')
-  .description('Manage API keys')
+//@LOGIN_COMMANDS
+const loginCommand = program.command('login').description('Manage server connections');
+
+loginCommand
+  .command('list', { isDefault: true })
+  .description('List configured servers')
   .action(async () => {
     const servers = listServers();
     const active = getActiveServerName();
@@ -358,11 +488,50 @@ program
       const endpoint = config.mode === 'unix_socket' ? config.socket_path : config.url;
       console.log(`${marker} ${name} (${mode}): ${endpoint}`);
     }
+  });
 
-    console.log('\nUse subcommands to manage servers:');
-    console.log('  orpheus login add <name> <url> [--key <api-key>]');
-    console.log('  orpheus login use <name>');
-    console.log('  orpheus login remove <name>');
+loginCommand
+  .command('add <name> <url>')
+  .description('Add a new server')
+  .option('-k, --key <key>', 'API key for authentication')
+  .action(async (name: string, url: string, options: { key?: string }) => {
+    try {
+      addServer(name, url, options.key);
+      console.log(`\x1b[32m✓\x1b[0m Added server: ${name}`);
+      console.log(`  URL: ${url}`);
+      if (options.key) {
+        console.log(`  Auth: configured`);
+      }
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
+loginCommand
+  .command('use <name>')
+  .description('Set active server')
+  .action(async (name: string) => {
+    try {
+      setActiveServer(name);
+      console.log(`\x1b[32m✓\x1b[0m Active server set to: ${name}`);
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
+loginCommand
+  .command('remove <name>')
+  .description('Remove a server')
+  .action(async (name: string) => {
+    try {
+      removeServer(name);
+      console.log(`\x1b[32m✓\x1b[0m Removed server: ${name}`);
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 //@VM_COMMANDS
@@ -372,35 +541,116 @@ vmCommand
   .command('start')
   .description('Start Lima VM')
   .action(async () => {
-    console.log('\n\x1b[33mVM start not yet implemented\x1b[0m');
+    if (!checkMacOS()) {
+      console.error('\x1b[31mError:\x1b[0m VM commands only available on macOS');
+      process.exit(1);
+    }
+    if (!checkLimaInstalled()) {
+      console.error('\x1b[31mError:\x1b[0m Lima not installed. Install with: brew install lima');
+      process.exit(1);
+    }
+    try {
+      startVM();
+      console.log('\x1b[32m✓\x1b[0m VM started');
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 vmCommand
   .command('stop')
   .description('Stop Lima VM')
   .action(async () => {
-    console.log('\n\x1b[33mVM stop not yet implemented\x1b[0m');
+    if (!checkMacOS()) {
+      console.error('\x1b[31mError:\x1b[0m VM commands only available on macOS');
+      process.exit(1);
+    }
+    if (!checkLimaInstalled()) {
+      console.error('\x1b[31mError:\x1b[0m Lima not installed');
+      process.exit(1);
+    }
+    try {
+      stopVM();
+      console.log('\x1b[32m✓\x1b[0m VM stopped');
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 vmCommand
   .command('status')
   .description('Show VM status')
   .action(async () => {
-    console.log('\n\x1b[33mVM status not yet implemented\x1b[0m');
+    if (!checkMacOS()) {
+      console.error('\x1b[31mError:\x1b[0m VM commands only available on macOS');
+      process.exit(1);
+    }
+    if (!checkLimaInstalled()) {
+      console.log('Lima: \x1b[31mnot installed\x1b[0m');
+      console.log('Install with: brew install lima');
+      return;
+    }
+
+    const status = getVMStatus();
+    if (!status.exists) {
+      console.log('VM: \x1b[33mnot created\x1b[0m');
+      console.log('Create with: limactl start --name=orpheus template://default');
+      return;
+    }
+
+    const statusColor = status.status === 'Running' ? '\x1b[32m' : '\x1b[33m';
+    console.log(`VM: ${statusColor}${status.status}\x1b[0m`);
+    if (status.arch) console.log(`Arch: ${status.arch}`);
+    if (status.cpus) console.log(`CPUs: ${status.cpus}`);
+    if (status.memory) console.log(`Memory: ${status.memory}`);
+    if (status.disk) console.log(`Disk: ${status.disk}`);
   });
 
 vmCommand
   .command('ssh')
   .description('SSH into VM')
   .action(async () => {
-    console.log('\n\x1b[33mVM ssh not yet implemented\x1b[0m');
+    if (!checkMacOS()) {
+      console.error('\x1b[31mError:\x1b[0m VM commands only available on macOS');
+      process.exit(1);
+    }
+    if (!checkLimaInstalled()) {
+      console.error('\x1b[31mError:\x1b[0m Lima not installed');
+      process.exit(1);
+    }
+    const status = getVMStatus();
+    if (!status.exists) {
+      console.error('\x1b[31mError:\x1b[0m VM not created');
+      process.exit(1);
+    }
+    if (status.status !== 'Running') {
+      console.error('\x1b[31mError:\x1b[0m VM not running. Start with: orpheus vm start');
+      process.exit(1);
+    }
+    sshVM();
   });
 
 vmCommand
   .command('delete')
   .description('Delete VM')
   .action(async () => {
-    console.log('\n\x1b[33mVM delete not yet implemented\x1b[0m');
+    if (!checkMacOS()) {
+      console.error('\x1b[31mError:\x1b[0m VM commands only available on macOS');
+      process.exit(1);
+    }
+    if (!checkLimaInstalled()) {
+      console.error('\x1b[31mError:\x1b[0m Lima not installed');
+      process.exit(1);
+    }
+    try {
+      deleteVM();
+      console.log('\x1b[32m✓\x1b[0m VM deleted');
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 //@DAEMON_COMMANDS
@@ -466,15 +716,62 @@ serverCommand
 serverCommand
   .command('create-key')
   .description('Generate new API key')
-  .action(async () => {
-    console.log('\n\x1b[33mCreate-key not yet implemented\x1b[0m');
+  .option('-n, --name <name>', 'Key name', 'default')
+  .option('--rpm <limit>', 'Rate limit (requests per minute)', '100')
+  .action(async (options: { name?: string; rpm?: string }) => {
+    const { platform } = await import('node:os');
+    const { execSync } = await import('node:child_process');
+
+    try {
+      let output: string;
+      const keyName = options.name || 'default';
+      const rpm = options.rpm || '100';
+
+      if (platform() === 'darwin') {
+        // macOS - use limactl to execute in VM
+        output = execSync(
+          `limactl shell orpheus -- sudo /usr/local/bin/orpheusd create-key --name "${keyName}" --rpm ${rpm}`,
+          { encoding: 'utf-8' }
+        );
+      } else {
+        // Linux - execute directly
+        output = execSync(
+          `sudo orpheusd create-key --name "${keyName}" --rpm ${rpm}`,
+          { encoding: 'utf-8' }
+        );
+      }
+      console.log(output);
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 serverCommand
   .command('list-keys')
   .description('List API keys')
   .action(async () => {
-    console.log('\n\x1b[33mList-keys not yet implemented\x1b[0m');
+    const { platform } = await import('node:os');
+    const { execSync } = await import('node:child_process');
+
+    try {
+      let output: string;
+
+      if (platform() === 'darwin') {
+        // macOS - use limactl to execute in VM
+        output = execSync(
+          'limactl shell orpheus -- sudo /usr/local/bin/orpheusd list-keys',
+          { encoding: 'utf-8' }
+        );
+      } else {
+        // Linux - execute directly
+        output = execSync('sudo orpheusd list-keys', { encoding: 'utf-8' });
+      }
+      console.log(output);
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 //@HELPERS
