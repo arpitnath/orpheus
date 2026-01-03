@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import React from 'react';
 import { Command } from 'commander';
 import { createClient, testConnection, getHealth, getStats } from './lib/api.js';
 import {
@@ -8,6 +9,10 @@ import {
   socketExists,
   listServers,
 } from './lib/config.js';
+import { renderApp } from './lib/render.js';
+import { StatusDashboard } from './components/StatusDashboard.js';
+import { DeployProgress } from './components/DeployProgress.js';
+import { LogViewer } from './components/LogViewer.js';
 
 //@VERSION
 const VERSION = '0.1.0';
@@ -25,35 +30,41 @@ program
 program
   .command('status')
   .description('Show system status and health')
-  .action(async () => {
-    console.log('Orpheus Status\n');
+  .option('--simple', 'Simple text output (no TUI)')
+  .action(async (options: { simple?: boolean }) => {
+    if (options.simple) {
+      // Simple text output
+      console.log('Orpheus Status\n');
+      const activeServer = getActiveServerName();
+      console.log(`Server: ${activeServer}`);
 
-    const activeServer = getActiveServerName();
-    console.log(`Server: ${activeServer}`);
+      if (!socketExists()) {
+        console.log('Daemon: \x1b[31mnot running\x1b[0m (socket not found)');
+        console.log(`Socket: ${getDefaultSocketPath()}`);
+        return;
+      }
 
-    if (!socketExists()) {
-      console.log('Daemon: \x1b[31mnot running\x1b[0m (socket not found)');
-      console.log(`Socket: ${getDefaultSocketPath()}`);
+      const health = await getHealth();
+      if (health) {
+        const statusColor = health.status === 'healthy' ? '\x1b[32m' : '\x1b[33m';
+        console.log(`Daemon: ${statusColor}${health.status}\x1b[0m`);
+        console.log(`Uptime: ${formatUptime(health.uptime_seconds)}`);
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const stats = await getStats();
+        if (stats && stats.global) {
+          console.log(`\nAgents: ${stats.global.total_agents} deployed`);
+          console.log(`Workers: ${stats.global.total_workers} total`);
+          console.log(`Pending: ${stats.global.total_pending} requests`);
+        }
+      } else {
+        console.log('Daemon: \x1b[31mnot responding\x1b[0m');
+      }
       return;
     }
 
-    const health = await getHealth();
-    if (health) {
-      const statusColor = health.status === 'healthy' ? '\x1b[32m' : '\x1b[33m';
-      console.log(`Daemon: ${statusColor}${health.status}\x1b[0m`);
-      console.log(`Uptime: ${formatUptime(health.uptime_seconds)}`);
-
-      // TODO: fix with connection pooling
-      await new Promise(resolve => setTimeout(resolve, 50));
-      const stats = await getStats();
-      if (stats && stats.global) {
-        console.log(`\nAgents: ${stats.global.total_agents} deployed`);
-        console.log(`Workers: ${stats.global.total_workers} total`);
-        console.log(`Pending: ${stats.global.total_pending} requests`);
-      }
-    } else {
-      console.log('Daemon: \x1b[31mnot responding\x1b[0m');
-    }
+    // TUI dashboard (default)
+    renderApp(React.createElement(StatusDashboard));
   });
 
 program
@@ -61,10 +72,45 @@ program
   .description('Deploy an agent')
   .option('-f, --force', 'Overwrite existing agent')
   .option('-r, --remote', 'Deploy to remote server')
-  .action(async (path: string, options: { force?: boolean; remote?: boolean }) => {
-    console.log(`Deploying agent from: ${path}`);
-    console.log('Options:', options);
-    console.log('\n\x1b[33mDeploy command not yet implemented\x1b[0m');
+  .option('--simple', 'Simple text output (no TUI)')
+  .action(async (agentPath: string, options: { force?: boolean; remote?: boolean; simple?: boolean }) => {
+    const path = await import('node:path');
+
+    // Extract agent name from path
+    const resolvedPath = path.resolve(agentPath);
+    const agentName = path.basename(resolvedPath);
+
+    if (options.simple) {
+      console.log(`Deploying agent from: ${agentPath}`);
+      console.log('\n\x1b[33mDeploy not yet fully implemented\x1b[0m');
+      return;
+    }
+
+    // TUI deploy progress
+    const onDeploy = async () => {
+      try {
+        const client = createClient();
+        const result = await client.deploy(resolvedPath, { force: options.force });
+        return {
+          success: result.success,
+          endpoints: result.endpoints,
+          error: result.message,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Unknown error',
+        };
+      }
+    };
+
+    renderApp(
+      React.createElement(DeployProgress, {
+        agentName,
+        agentPath: resolvedPath,
+        onDeploy,
+      })
+    );
   });
 
 program
@@ -130,9 +176,35 @@ program
   .option('-f, --follow', 'Follow log output')
   .option('-n, --tail <lines>', 'Number of lines to show', '50')
   .option('--grep <pattern>', 'Filter by pattern')
-  .action(async (options: { follow?: boolean; tail?: string; grep?: string }) => {
-    console.log('Logs options:', options);
-    console.log('\n\x1b[33mLogs command not yet implemented\x1b[0m');
+  .option('--simple', 'Simple text output (no TUI)')
+  .action(async (options: { follow?: boolean; tail?: string; grep?: string; simple?: boolean }) => {
+    const tailNum = parseInt(options.tail || '50', 10);
+
+    if (options.simple) {
+      console.log('Logs (simple mode)');
+      console.log('\n\x1b[33mLogs endpoint not yet implemented in daemon\x1b[0m');
+      return;
+    }
+
+    // Mock log fetcher - daemon needs /v1/logs endpoint
+    const onFetchLogs = async () => {
+      // TODO: Replace with actual daemon API call when available
+      // For now, return mock data to demonstrate the UI
+      return [
+        { timestamp: new Date().toISOString().slice(11, 19), level: 'INFO' as const, message: 'Daemon started' },
+        { timestamp: new Date().toISOString().slice(11, 19), level: 'INFO' as const, message: 'Worker pool initialized', agent: 'calculator' },
+        { timestamp: new Date().toISOString().slice(11, 19), level: 'DEBUG' as const, message: 'Health check passed' },
+      ];
+    };
+
+    renderApp(
+      React.createElement(LogViewer, {
+        follow: options.follow,
+        tail: tailNum,
+        grep: options.grep,
+        onFetchLogs,
+      })
+    );
   });
 
 program
