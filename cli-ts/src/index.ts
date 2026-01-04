@@ -81,11 +81,10 @@ program
 
 program
   .command('deploy <path>')
-  .description('Deploy an agent')
+  .description('Deploy an agent to the configured server')
   .option('-f, --force', 'Overwrite existing agent')
-  .option('-r, --remote', 'Deploy to remote server')
   .option('--simple', 'Simple text output (no TUI)')
-  .action(async (agentPath: string, options: { force?: boolean; remote?: boolean; simple?: boolean }) => {
+  .action(async (agentPath: string, options: { force?: boolean; simple?: boolean }) => {
     const path = await import('node:path');
 
     // Extract agent name from path
@@ -104,8 +103,9 @@ program
         const client = createClient();
         const result = await client.deploy(resolvedPath, { force: options.force });
         return {
-          success: result.success,
+          success: result.status === 'deployed',
           endpoints: result.endpoints,
+          dependencies: result.dependencies,
           error: result.message,
         };
       } catch (err) {
@@ -161,7 +161,8 @@ program
       const client = createClient();
       console.log(`Undeploying ${agent}...`);
       const result = await client.undeploy(agent);
-      if (result.success) {
+      // Daemon returns { message: "agent undeployed", name: "..." } on success
+      if (result.message?.includes('undeployed')) {
         console.log(`\x1b[32m✓\x1b[0m Agent ${agent} undeployed`);
       } else {
         console.log(`\x1b[31m✗\x1b[0m ${result.message || 'Failed to undeploy'}`);

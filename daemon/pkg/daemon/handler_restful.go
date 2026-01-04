@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -502,7 +504,7 @@ func (s *Server) handleGetAgentByName(w http.ResponseWriter, agentName string) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// handleDeleteAgentByName unregisters an agent.
+// handleDeleteAgentByName unregisters an agent and removes its files.
 // DELETE /v1/agents/{name}
 func (s *Server) handleDeleteAgentByName(w http.ResponseWriter, agentName string) {
 	// NEW Phase 2: Remove pool first (before registry)
@@ -513,14 +515,33 @@ func (s *Server) handleDeleteAgentByName(w http.ResponseWriter, agentName string
 		}
 	}
 
+	// Get agent path before deleting from registry
+	agent, err := s.registry.Get(agentName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("agent not found: %s", agentName))
+		return
+	}
+
 	// Delete from registry
 	if err := s.registry.Delete(agentName); err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("agent not found: %s", agentName))
 		return
 	}
 
+	// Delete agent directory from disk
+	// Agent path points to /agent subdir, so get parent for full rootfs
+	agentDir := filepath.Dir(agent.Path) // .../agents/{name}/agent -> .../agents/{name}
+	if agentDir != "" && agentDir != "/" && agentDir != "." {
+		if removeErr := os.RemoveAll(agentDir); removeErr != nil {
+			log.Printf("[handler] Warning: Failed to remove agent directory '%s': %v", agentDir, removeErr)
+			// Continue - registry already cleaned up
+		} else {
+			log.Printf("[handler] Removed agent directory: %s", agentDir)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{
-		"message": "agent unregistered",
+		"message": "agent undeployed",
 		"name":    agentName,
 	})
 }
