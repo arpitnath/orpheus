@@ -81,14 +81,24 @@ export interface StatsResponse {
   timestamp: string;
 }
 
+export interface DependencyInfo {
+  installed: boolean;
+  runtime: string;
+  source?: string; // requirements.txt, package.json
+}
+
 export interface DeployResponse {
-  success: boolean;
-  agent: string;
+  agent_name: string;
+  status: string;
   endpoints: {
     http: string;
     mcp?: string;
   };
-  workers: number;
+  size_mb?: number;
+  deployed_at?: string;
+  dependencies?: DependencyInfo;
+  // For TUI compatibility
+  success?: boolean;
   message?: string;
 }
 

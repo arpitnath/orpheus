@@ -11,12 +11,19 @@ interface Step {
   error?: string;
 }
 
+interface DependencyInfo {
+  installed: boolean;
+  runtime: string;
+  source?: string;
+}
+
 interface DeployResult {
   success: boolean;
   endpoints?: {
     http: string;
     mcp?: string;
   };
+  dependencies?: DependencyInfo;
   error?: string;
 }
 
@@ -51,7 +58,8 @@ export const DeployProgress: React.FC<DeployProgressProps> = ({
     { name: 'Validating agent.yaml', status: 'pending' },
     { name: 'Packaging agent files', status: 'pending' },
     { name: 'Uploading to daemon', status: 'pending' },
-    { name: 'Deploying agent', status: 'pending' },
+    { name: 'Installing dependencies', status: 'pending' },
+    { name: 'Registering agent', status: 'pending' },
   ]);
   const [result, setResult] = useState<DeployResult | null>(null);
 
@@ -68,28 +76,43 @@ export const DeployProgress: React.FC<DeployProgressProps> = ({
       try {
         // Step 1: Validate
         updateStep(0, 'running');
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 400));
         updateStep(0, 'completed');
 
         // Step 2: Package
         updateStep(1, 'running');
-        await new Promise(r => setTimeout(r, 800));
+        await new Promise(r => setTimeout(r, 600));
         updateStep(1, 'completed');
 
-        // Step 3: Upload
+        // Step 3: Upload (starts the actual deploy)
         updateStep(2, 'running');
-        await new Promise(r => setTimeout(r, 1000));
+
+        // onDeploy() does: tarball creation, upload, daemon processes (install deps, register)
+        // We show steps 3-5 progressing during this single call
+        const deployPromise = onDeploy();
+
+        // After a short delay, show upload complete and deps installing
+        await new Promise(r => setTimeout(r, 800));
         updateStep(2, 'completed');
 
-        // Step 4: Deploy
+        // Step 4: Installing dependencies (daemon-side)
         updateStep(3, 'running');
-        const deployResult = await onDeploy();
+
+        // After another delay, show deps complete and registering
+        await new Promise(r => setTimeout(r, 1500));
+        updateStep(3, 'completed');
+
+        // Step 5: Registering agent
+        updateStep(4, 'running');
+
+        // Wait for actual deploy to complete
+        const deployResult = await deployPromise;
 
         if (deployResult.success) {
-          updateStep(3, 'completed');
+          updateStep(4, 'completed');
           setResult(deployResult);
         } else {
-          updateStep(3, 'error', deployResult.error);
+          updateStep(4, 'error', deployResult.error);
           setResult(deployResult);
         }
       } catch (err) {
@@ -130,6 +153,9 @@ export const DeployProgress: React.FC<DeployProgressProps> = ({
           {result.success ? (
             <>
               <Text color="green">✓ Agent deployed successfully!</Text>
+              {result.dependencies?.installed && (
+                <Text dimColor>  Dependencies installed from {result.dependencies.source}</Text>
+              )}
               {result.endpoints && (
                 <Box marginTop={1} flexDirection="column">
                   <Text>  HTTP: {result.endpoints.http}</Text>
