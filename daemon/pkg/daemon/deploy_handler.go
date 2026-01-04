@@ -9,21 +9,31 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"orpheus/daemon/pkg/config"
 	"orpheus/daemon/pkg/deploy"
 	"orpheus/daemon/pkg/registry"
 )
 
 // DeployResponse is the response for POST /v1/deploy.
 type DeployResponse struct {
-	AgentName  string            `json:"agent_name"`
-	Status     string            `json:"status"`
-	Endpoints  map[string]string `json:"endpoints"`
-	SizeMB     int               `json:"size_mb"`
-	DeployedAt string            `json:"deployed_at"`
+	AgentName    string            `json:"agent_name"`
+	Status       string            `json:"status"`
+	Endpoints    map[string]string `json:"endpoints"`
+	SizeMB       int               `json:"size_mb"`
+	DeployedAt   string            `json:"deployed_at"`
+	Dependencies *DependencyInfo   `json:"dependencies,omitempty"`
+}
+
+// DependencyInfo contains information about installed dependencies.
+type DependencyInfo struct {
+	Installed bool   `json:"installed"`
+	Runtime   string `json:"runtime"`
+	Source    string `json:"source,omitempty"` // requirements.txt, package.json
 }
 
 // handleDeploy handles POST /v1/deploy for remote agent deployment.
@@ -116,6 +126,14 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract to temp directory first to read agent.yaml
+	tempExtractDir, err := os.MkdirTemp("", "orpheus-extract-*")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create temp extract dir: %v", err))
+		return
+	}
+	defer os.RemoveAll(tempExtractDir)
+
 	// Open tar file for extraction
 	tarFile, err := os.Open(tempPath)
 	if err != nil {
@@ -124,29 +142,75 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tarFile.Close()
 
-	log.Printf("Starting extraction to %s...", agentBaseDir)
+	log.Printf("Extracting to temp directory...")
 
-	// Extract tar to agents directory
-	// Extract to parent directory, tar contains {agentName}/ prefix
-	if err := deploy.ExtractTar(tarFile, agentBaseDir); err != nil {
-		// Cleanup partial extraction
-		os.RemoveAll(agentDir)
+	// Extract tar to temp directory
+	if err := deploy.ExtractTar(tarFile, tempExtractDir); err != nil {
 		log.Printf("ERROR: Extraction failed: %v", err)
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("extract tar: %v", err))
 		return
 	}
 
-	log.Printf("Extracted agent '%s' to %s", agentName, agentDir)
+	// Agent code is in tempExtractDir/{agentName}/
+	tempAgentDir := filepath.Join(tempExtractDir, agentName)
 
 	// Verify agent.yaml exists
-	agentYAML := filepath.Join(agentDir, "agent.yaml")
+	agentYAML := filepath.Join(tempAgentDir, "agent.yaml")
 	if _, err := os.Stat(agentYAML); os.IsNotExist(err) {
-		os.RemoveAll(agentDir)
 		writeError(w, http.StatusBadRequest, "agent.yaml not found in uploaded tar")
 		return
 	}
 
-	// TODO: Load agent.yaml and validate
+	// Load agent.yaml to get runtime
+	agentConfig, err := config.Load(tempAgentDir)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid agent.yaml: %v", err))
+		return
+	}
+
+	log.Printf("Agent runtime: %s", agentConfig.Runtime)
+
+	// Determine base image path based on runtime
+	baseImagePath, err := resolveBaseImagePath(agentConfig.Runtime)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("resolve base image: %v", err))
+		return
+	}
+
+	log.Printf("Using base image: %s", baseImagePath)
+
+	// Copy base image to agent directory
+	log.Printf("Copying base image to %s...", agentDir)
+	if err := copyDir(baseImagePath, agentDir); err != nil {
+		os.RemoveAll(agentDir)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("copy base image: %v", err))
+		return
+	}
+
+	// Copy agent code into /agent subdirectory
+	agentCodeDir := filepath.Join(agentDir, "agent")
+	log.Printf("Copying agent code to %s...", agentCodeDir)
+	if err := copyDir(tempAgentDir, agentCodeDir); err != nil {
+		os.RemoveAll(agentDir)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("copy agent code: %v", err))
+		return
+	}
+
+	// Install dependencies based on runtime
+	log.Printf("Installing dependencies for '%s' (runtime: %s)...", agentName, agentConfig.Runtime)
+	depInfo, err := installDependencies(agentConfig.Runtime, agentCodeDir, agentDir)
+	if err != nil {
+		os.RemoveAll(agentDir)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("install dependencies: %v", err))
+		return
+	}
+	if depInfo != nil && depInfo.Installed {
+		log.Printf("Dependencies installed for '%s' from %s", agentName, depInfo.Source)
+	} else {
+		log.Printf("No dependencies to install for '%s'", agentName)
+	}
+
+	log.Printf("Deployed agent '%s' with base image merge", agentName)
 
 	// Calculate deployed size
 	sizeMB := calculateDirSizeMB(agentDir)
@@ -164,10 +228,12 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register agent in registry
+	// Path points to agent code directory (agentDir/agent), not rootfs
+	// resolveImagePath() finds the rootfs separately based on agent name
 	if s.registry != nil {
 		regErr := s.registry.Register(registry.RegisteredAgent{
 			Name:        agentName,
-			Path:        agentDir,
+			Path:        agentCodeDir, // Points to /agent subdirectory for config loading
 			ResolvedEnv: resolvedEnv,
 		})
 		if regErr != nil {
@@ -199,11 +265,12 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 	// Return success response
 	response := DeployResponse{
-		AgentName:  agentName,
-		Status:     "deployed",
-		Endpoints:  endpoints,
-		SizeMB:     sizeMB,
-		DeployedAt: time.Now().UTC().Format(time.RFC3339),
+		AgentName:    agentName,
+		Status:       "deployed",
+		Endpoints:    endpoints,
+		SizeMB:       sizeMB,
+		DeployedAt:   time.Now().UTC().Format(time.RFC3339),
+		Dependencies: depInfo,
 	}
 
 	writeJSON(w, http.StatusOK, response)
@@ -249,4 +316,134 @@ func getOrgIDFromRequest(r *http.Request) string {
 	orgID := "org-" + hex.EncodeToString(hash[:])[:12]
 
 	return orgID
+}
+
+// resolveBaseImagePath returns the path to the base image for the given runtime.
+// Images are stored in ~/.orpheus/images/{imageName}/
+func resolveBaseImagePath(runtime string) (string, error) {
+	var imageName string
+	switch runtime {
+	case config.RuntimeNodeJS20:
+		imageName = "nodejs-20"
+	case config.RuntimePython3, "":
+		imageName = "python-3.10"
+	default:
+		return "", fmt.Errorf("unsupported runtime: %s", runtime)
+	}
+
+	// Try multiple possible locations for base images
+	// 1. /var/lib/orpheus/images (system-wide)
+	// 2. ~/.orpheus/images (user)
+	// 3. For Lima: mounted macOS home directory
+	searchPaths := []string{}
+
+	// System path
+	searchPaths = append(searchPaths, filepath.Join("/var/lib/orpheus/images", imageName))
+
+	// User home path
+	if home, err := os.UserHomeDir(); err == nil {
+		searchPaths = append(searchPaths, filepath.Join(home, ".orpheus", "images", imageName))
+	}
+
+	// Lima mounted macOS home (try common paths)
+	macOSHomes := []string{"/Users/arpit", "/home/arpit"}
+	for _, macHome := range macOSHomes {
+		searchPaths = append(searchPaths, filepath.Join(macHome, ".orpheus", "images", imageName))
+	}
+
+	// Find first existing path with /lib directory (valid rootfs)
+	for _, path := range searchPaths {
+		libPath := filepath.Join(path, "lib")
+		if _, err := os.Stat(libPath); err == nil {
+			return path, nil
+		}
+	}
+
+	return "", fmt.Errorf("base image '%s' not found (tried: %v)", imageName, searchPaths)
+}
+
+// copyDir copies a directory recursively using cp -a for efficiency.
+func copyDir(src, dst string) error {
+	// Ensure destination exists
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return fmt.Errorf("create dst dir: %w", err)
+	}
+
+	// Use cp -a for efficient recursive copy with permissions preserved
+	cmd := exec.Command("cp", "-a", src+"/.", dst)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("cp failed: %v: %s", err, string(output))
+	}
+	return nil
+}
+
+// installDependencies installs agent dependencies based on runtime.
+// - Python: pip install -r requirements.txt --target /packages
+// - Node.js: npm install in agent code directory
+// Returns DependencyInfo describing what was installed.
+func installDependencies(runtime, agentCodeDir, agentDir string) (*DependencyInfo, error) {
+	switch runtime {
+	case config.RuntimePython3, "":
+		installed, err := installPythonDeps(agentCodeDir, agentDir)
+		if err != nil {
+			return nil, err
+		}
+		if installed {
+			return &DependencyInfo{Installed: true, Runtime: "python3", Source: "requirements.txt"}, nil
+		}
+		return &DependencyInfo{Installed: false, Runtime: "python3"}, nil
+	case config.RuntimeNodeJS20:
+		installed, err := installNodeDeps(agentCodeDir)
+		if err != nil {
+			return nil, err
+		}
+		if installed {
+			return &DependencyInfo{Installed: true, Runtime: "nodejs20", Source: "package.json"}, nil
+		}
+		return &DependencyInfo{Installed: false, Runtime: "nodejs20"}, nil
+	default:
+		return nil, nil // Unknown runtime, skip
+	}
+}
+
+// installPythonDeps installs Python dependencies from requirements.txt.
+// Returns true if dependencies were installed, false if skipped.
+func installPythonDeps(agentCodeDir, agentDir string) (bool, error) {
+	requirementsFile := filepath.Join(agentCodeDir, "requirements.txt")
+	if _, err := os.Stat(requirementsFile); os.IsNotExist(err) {
+		log.Printf("No requirements.txt found, skipping Python dependency install")
+		return false, nil // No requirements.txt, skip
+	}
+
+	packagesDir := filepath.Join(agentDir, "packages")
+	log.Printf("Installing Python dependencies to %s", packagesDir)
+
+	cmd := exec.Command("pip3", "install",
+		"-r", requirementsFile,
+		"--target", packagesDir,
+		"--quiet",
+		"--no-cache-dir")
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("pip install failed: %v: %s", err, string(output))
+	}
+	return true, nil
+}
+
+// installNodeDeps installs Node.js dependencies from package.json.
+// Returns true if dependencies were installed, false if skipped.
+func installNodeDeps(agentCodeDir string) (bool, error) {
+	packageJSON := filepath.Join(agentCodeDir, "package.json")
+	if _, err := os.Stat(packageJSON); os.IsNotExist(err) {
+		log.Printf("No package.json found, skipping Node.js dependency install")
+		return false, nil // No package.json, skip
+	}
+
+	log.Printf("Installing Node.js dependencies in %s", agentCodeDir)
+
+	cmd := exec.Command("npm", "install", "--prefix", agentCodeDir, "--quiet")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("npm install failed: %v: %s", err, string(output))
+	}
+	return true, nil
 }

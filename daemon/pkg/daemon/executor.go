@@ -132,11 +132,22 @@ func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime
 }
 
 // resolveImagePath determines the rootfs path for the agent.
-// It checks for deployed images in ~/.orpheus/agents/{name}/runtime/
+// It checks for deployed images in ~/.orpheus/agents/{name}/
 // and falls back to the agent directory if not deployed.
+//
+// With base image merging, the directory structure is:
+//   ~/.orpheus/agents/{name}/        <- rootfs (lib, usr, etc)
+//   ~/.orpheus/agents/{name}/agent/  <- agent code (agent.yaml, etc)
+//
+// The agentPath may point to either the rootfs or the agent code directory.
 func resolveImagePath(agentPath string) string {
 	// Get agent name from path
+	// If path ends with /agent, use parent directory name
 	agentName := filepath.Base(agentPath)
+	if agentName == "agent" {
+		// Path is .../agents/{name}/agent, get the parent dir name
+		agentName = filepath.Base(filepath.Dir(agentPath))
+	}
 
 	// Try multiple possible home directories:
 	// 1. Current user's home (daemon might run as different user)
