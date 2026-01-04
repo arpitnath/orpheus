@@ -3,6 +3,7 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest, RequestOptions } from 'node:https';
 import { URL } from 'node:url';
 import { getActiveServer } from './config.js';
+import { createTarball, calculateChecksum, uploadAgent, validateAgentPath } from './deploy.js';
 import type {
   ServerConfig,
   HealthResponse,
@@ -139,13 +140,23 @@ export function createClient(_serverName?: string): OrpheusClient {
       return makeRequest<StatsResponse>('GET', path, serverConfig);
     },
 
-    async deploy(_agentPath: string, _options?: DeployOptions): Promise<DeployResponse> {
-      // TODO: Implement deploy with multipart form data
-      // This will need to:
-      // 1. Create tar archive of agent directory
-      // 2. Calculate checksum
-      // 3. Upload via multipart form
-      throw new Error('Deploy not yet implemented in TypeScript CLI');
+    async deploy(agentPath: string, _options?: DeployOptions): Promise<DeployResponse> {
+      // Validate agent path
+      const validation = validateAgentPath(agentPath);
+      if (!validation.valid) {
+        throw new Error(validation.error || 'Invalid agent path');
+      }
+
+      const agentName = validation.agentName!;
+
+      // Create tarball
+      const tarball = await createTarball(agentPath);
+
+      // Calculate checksum
+      const checksum = calculateChecksum(tarball);
+
+      // Upload to daemon
+      return uploadAgent(serverConfig, agentName, tarball, checksum);
     },
 
     async invoke(agentName: string, input: unknown): Promise<InvokeResponse> {

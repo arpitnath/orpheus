@@ -26,6 +26,7 @@
     "ink": "^5.0.1",
     "ink-spinner": "^5.0.0",
     "react": "^18.2.0",
+    "tar": "^7.5.2",
     "yaml": "^2.3.4"
   },
   "devDependencies": {
