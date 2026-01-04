@@ -103,7 +103,13 @@ export interface DeployResponse {
 }
 
 export interface InvokeResponse {
-  success: boolean;
+  // Daemon format
+  status?: string;
+  output?: unknown;
+  raw_output?: string;
+  duration_ms?: number;
+  // Legacy format for compatibility
+  success?: boolean;
   result?: unknown;
   error?: string;
   execution_time_ms?: number;
@@ -162,6 +168,7 @@ export interface DeployOptions {
   force?: boolean;
   remote?: boolean;
   config?: string;
+  env?: string[];
 }
 
 //@CLI_OUTPUT_TYPES

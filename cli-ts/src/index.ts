@@ -22,9 +22,7 @@ import {
   sshVM,
 } from './lib/vm.js';
 import { renderApp } from './lib/render.js';
-import { StatusDashboard } from './components/StatusDashboard.js';
 import { DeployProgress } from './components/DeployProgress.js';
-import { LogViewer } from './components/LogViewer.js';
 
 //@VERSION
 const VERSION = '0.1.0';
@@ -42,66 +40,53 @@ program
 program
   .command('status')
   .description('Show system status and health')
-  .option('--simple', 'Simple text output (no TUI)')
-  .action(async (options: { simple?: boolean }) => {
-    if (options.simple) {
-      // Simple text output
-      console.log('Orpheus Status\n');
-      const activeServer = getActiveServerName();
-      console.log(`Server: ${activeServer}`);
+  .action(async () => {
+    // Text output
+    console.log('Orpheus Status\n');
+    const activeServer = getActiveServerName();
+    console.log(`Server: ${activeServer}`);
 
-      if (!socketExists()) {
-        console.log('Daemon: \x1b[31mnot running\x1b[0m (socket not found)');
-        console.log(`Socket: ${getDefaultSocketPath()}`);
-        return;
-      }
-
-      const health = await getHealth();
-      if (health) {
-        const statusColor = health.status === 'healthy' ? '\x1b[32m' : '\x1b[33m';
-        console.log(`Daemon: ${statusColor}${health.status}\x1b[0m`);
-        console.log(`Uptime: ${formatUptime(health.uptime_seconds)}`);
-
-        await new Promise(resolve => setTimeout(resolve, 50));
-        const stats = await getStats();
-        if (stats && stats.global) {
-          console.log(`\nAgents: ${stats.global.total_agents} deployed`);
-          console.log(`Workers: ${stats.global.total_workers} total`);
-          console.log(`Pending: ${stats.global.total_pending} requests`);
-        }
-      } else {
-        console.log('Daemon: \x1b[31mnot responding\x1b[0m');
-      }
+    if (!socketExists()) {
+      console.log('Daemon: \x1b[31mnot running\x1b[0m (socket not found)');
+      console.log(`Socket: ${getDefaultSocketPath()}`);
       return;
     }
 
-    // TUI dashboard (default)
-    renderApp(React.createElement(StatusDashboard));
+    const health = await getHealth();
+    if (health) {
+      const statusColor = health.status === 'healthy' ? '\x1b[32m' : '\x1b[33m';
+      console.log(`Daemon: ${statusColor}${health.status}\x1b[0m`);
+      console.log(`Uptime: ${formatUptime(health.uptime_seconds)}`);
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const stats = await getStats();
+      if (stats && stats.global) {
+        console.log(`\nAgents: ${stats.global.total_agents} deployed`);
+        console.log(`Workers: ${stats.global.total_workers} total`);
+        console.log(`Pending: ${stats.global.total_pending} requests`);
+      }
+    } else {
+      console.log('Daemon: \x1b[31mnot responding\x1b[0m');
+    }
   });
 
 program
   .command('deploy <path>')
   .description('Deploy an agent to the configured server')
   .option('-f, --force', 'Overwrite existing agent')
-  .option('--simple', 'Simple text output (no TUI)')
-  .action(async (agentPath: string, options: { force?: boolean; simple?: boolean }) => {
+  .option('-e, --env <vars...>', 'Environment variables (KEY=VALUE)')
+  .action(async (agentPath: string, options: { force?: boolean; env?: string[] }) => {
     const path = await import('node:path');
 
     // Extract agent name from path
     const resolvedPath = path.resolve(agentPath);
     const agentName = path.basename(resolvedPath);
 
-    if (options.simple) {
-      console.log(`Deploying agent from: ${agentPath}`);
-      console.log('\n\x1b[33mDeploy not yet fully implemented\x1b[0m');
-      return;
-    }
-
     // TUI deploy progress
     const onDeploy = async () => {
       try {
         const client = createClient();
-        const result = await client.deploy(resolvedPath, { force: options.force });
+        const result = await client.deploy(resolvedPath, { force: options.force, env: options.env });
         return {
           success: result.status === 'deployed',
           endpoints: result.endpoints,
@@ -127,13 +112,29 @@ program
 
 program
   .command('run <agent>')
-  .description('Run an agent locally')
-  .option('-i, --input <json>', 'Input JSON')
-  .option('--no-isolate', 'Skip container isolation')
-  .action(async (agent: string, options: { input?: string; isolate?: boolean }) => {
-    console.log(`Running agent: ${agent}`);
-    console.log('Options:', options);
-    console.log('\n\x1b[33mRun command not yet implemented\x1b[0m');
+  .description('Execute a deployed agent')
+  .argument('[input]', 'Input JSON')
+  .action(async (agentName: string, inputArg?: string) => {
+    try {
+      const client = createClient();
+      const input = inputArg ? JSON.parse(inputArg) : {};
+      const result = await client.invoke(agentName, input);
+
+      // Handle daemon response format: {status, output, duration_ms}
+      const isSuccess = result.status === 'success' || result.success;
+      const output = result.output ?? result.result;
+
+      if (isSuccess) {
+        console.log(JSON.stringify(output, null, 2));
+      } else {
+        const errorMsg = result.error || (typeof output === 'object' && output && 'error' in output ? (output as {error: string}).error : 'Execution failed');
+        console.error(`\x1b[31mError:\x1b[0m ${errorMsg}`);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 program
@@ -215,38 +216,71 @@ program
 program
   .command('logs')
   .description('View daemon logs')
+  .argument('[agent]', 'Filter by agent name')
   .option('-f, --follow', 'Follow log output')
   .option('-n, --tail <lines>', 'Number of lines to show', '50')
   .option('--grep <pattern>', 'Filter by pattern')
-  .option('--simple', 'Simple text output (no TUI)')
-  .action(async (options: { follow?: boolean; tail?: string; grep?: string; simple?: boolean }) => {
+  .action(async (agentName: string | undefined, options: { follow?: boolean; tail?: string; grep?: string }) => {
+    const { execSync } = await import('node:child_process');
+    const { platform } = await import('node:os');
+    const logPath = '/var/log/orpheusd.log';
     const tailNum = parseInt(options.tail || '50', 10);
 
-    if (options.simple) {
-      console.log('Logs (simple mode)');
-      console.log('\n\x1b[33mLogs endpoint not yet implemented in daemon\x1b[0m');
-      return;
+    try {
+      let cmd: string;
+      if (platform() === 'darwin') {
+        // macOS - read via Lima VM
+        cmd = `limactl shell orpheus -- cat ${logPath} 2>/dev/null || echo ""`;
+      } else {
+        // Linux - read directly
+        cmd = `cat ${logPath} 2>/dev/null || echo ""`;
+      }
+
+      let output = execSync(cmd, { encoding: 'utf-8' });
+
+      // Filter by agent if specified
+      if (agentName) {
+        output = output.split('\n').filter(l => l.includes(agentName)).join('\n');
+      }
+
+      // Filter by grep pattern
+      if (options.grep) {
+        output = output.split('\n').filter(l => l.includes(options.grep!)).join('\n');
+      }
+
+      // Tail to last N lines
+      const lines = output.split('\n').filter(l => l.trim());
+      output = lines.slice(-tailNum).join('\n');
+
+      if (!output.trim()) {
+        console.log('No logs found');
+        return;
+      }
+
+      console.log(output);
+
+      // Follow mode - poll for new logs
+      if (options.follow) {
+        console.log('\n\x1b[2m(following logs, Ctrl+C to exit)\x1b[0m\n');
+        let lastLength = lines.length;
+        setInterval(async () => {
+          try {
+            const newOutput = execSync(cmd, { encoding: 'utf-8' });
+            const newLines = newOutput.split('\n').filter(l => l.trim());
+            if (newLines.length > lastLength) {
+              const diff = newLines.slice(lastLength);
+              diff.forEach(line => console.log(line));
+              lastLength = newLines.length;
+            }
+          } catch {
+            // Ignore errors in follow mode
+          }
+        }, 1000);
+      }
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
     }
-
-    // Mock log fetcher - daemon needs /v1/logs endpoint
-    const onFetchLogs = async () => {
-      // TODO: Replace with actual daemon API call when available
-      // For now, return mock data to demonstrate the UI
-      return [
-        { timestamp: new Date().toISOString().slice(11, 19), level: 'INFO' as const, message: 'Daemon started' },
-        { timestamp: new Date().toISOString().slice(11, 19), level: 'INFO' as const, message: 'Worker pool initialized', agent: 'calculator' },
-        { timestamp: new Date().toISOString().slice(11, 19), level: 'DEBUG' as const, message: 'Health check passed' },
-      ];
-    };
-
-    renderApp(
-      React.createElement(LogViewer, {
-        follow: options.follow,
-        tail: tailNum,
-        grep: options.grep,
-        onFetchLogs,
-      })
-    );
   });
 
 program
@@ -270,14 +304,14 @@ program
       }
 
       console.log('Deployed Agents:\n');
-      console.log('NAME\t\t\tRUNTIME\t\tWORKERS\t\tSTATUS');
-      console.log('─'.repeat(60));
+      console.log('NAME                RUNTIME     STATUS');
+      console.log('─'.repeat(45));
       for (const agent of agents) {
-        const statusColor =
-          agent.status === 'running' ? '\x1b[32m' : agent.status === 'idle' ? '\x1b[33m' : '\x1b[31m';
-        console.log(
-          `${agent.name}\t\t${agent.runtime}\t\t${agent.workers}\t\t${statusColor}${agent.status}\x1b[0m`
-        );
+        const name = (agent.name || 'unknown').padEnd(20);
+        const runtime = (agent.runtime || 'python3').padEnd(12);
+        const status = agent.status || 'deployed';
+        const statusColor = status === 'running' ? '\x1b[32m' : status === 'idle' ? '\x1b[33m' : '\x1b[36m';
+        console.log(`${name}${runtime}${statusColor}${status}\x1b[0m`);
       }
     } catch (err) {
       console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
@@ -363,18 +397,85 @@ program
 
 program
   .command('ps')
-  .description('Show running containers')
-  .option('-a, --all', 'Show all containers')
-  .action(async (options: { all?: boolean }) => {
-    console.log('PS options:', options);
-    console.log('\n\x1b[33mPS command not yet implemented\x1b[0m');
+  .description('Show running agents and workers')
+  .option('-a, --all', 'Show all agents including idle')
+  .action(async (_options: { all?: boolean }) => {
+    try {
+      const client = createClient();
+      const agents = await client.list();
+
+      if (agents.length === 0) {
+        console.log('No agents deployed');
+        return;
+      }
+
+      console.log('NAME                RUNTIME     STATUS');
+      console.log('─'.repeat(45));
+      for (const agent of agents) {
+        const name = (agent.name || 'unknown').padEnd(20);
+        const runtime = (agent.runtime || 'python3').padEnd(12);
+        const status = agent.status || 'deployed';
+        const statusColor = status === 'running' ? '\x1b[32m' : status === 'idle' ? '\x1b[33m' : '\x1b[36m';
+        console.log(`${name}${runtime}${statusColor}${status}\x1b[0m`);
+      }
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 program
   .command('runs')
   .description('Show execution history')
-  .action(async () => {
-    console.log('\n\x1b[33mRuns command not yet implemented\x1b[0m');
+  .argument('[agent]', 'Filter by agent name')
+  .option('-n, --limit <count>', 'Number of runs to show', '20')
+  .action(async (agentName: string | undefined, options: { limit?: string }) => {
+    const { execSync } = await import('node:child_process');
+    const { platform } = await import('node:os');
+    const logPath = '/var/log/orpheusd.log';
+    const limit = parseInt(options.limit || '20', 10);
+
+    try {
+      let cmd: string;
+      if (platform() === 'darwin') {
+        // macOS - grep execution lines via Lima VM
+        cmd = `limactl shell orpheus -- grep -E "Executing|execution completed|execution failed" ${logPath} 2>/dev/null || echo ""`;
+      } else {
+        // Linux - grep directly
+        cmd = `grep -E "Executing|execution completed|execution failed" ${logPath} 2>/dev/null || echo ""`;
+      }
+
+      let output = execSync(cmd, { encoding: 'utf-8' });
+
+      // Filter by agent if specified
+      if (agentName) {
+        output = output.split('\n').filter(l => l.includes(agentName)).join('\n');
+      }
+
+      const lines = output.split('\n').filter(l => l.trim());
+      const limitedLines = lines.slice(-limit);
+
+      if (limitedLines.length === 0) {
+        console.log('No execution history found');
+        return;
+      }
+
+      console.log('Recent Executions:\n');
+      console.log('─'.repeat(70));
+      for (const line of limitedLines) {
+        // Color-code based on content
+        if (line.includes('failed')) {
+          console.log(`\x1b[31m${line}\x1b[0m`);
+        } else if (line.includes('completed')) {
+          console.log(`\x1b[32m${line}\x1b[0m`);
+        } else {
+          console.log(line);
+        }
+      }
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 program
@@ -447,29 +548,90 @@ program
 
 program
   .command('test <agent>')
-  .description('Test an agent')
+  .description('Test an agent with timing')
   .argument('[input]', 'Test input JSON')
   .option('--verbose', 'Verbose output')
-  .action(async (agent: string, input?: string, options?: { verbose?: boolean }) => {
-    console.log(`Testing agent: ${agent}`);
-    console.log('Input:', input);
-    console.log('Options:', options);
-    console.log('\n\x1b[33mTest command not yet implemented\x1b[0m');
+  .action(async (agentName: string, inputArg?: string, options?: { verbose?: boolean }) => {
+    try {
+      const client = createClient();
+      const input = inputArg ? JSON.parse(inputArg) : {};
+
+      if (options?.verbose) {
+        console.log(`\x1b[36mAgent:\x1b[0m ${agentName}`);
+        console.log(`\x1b[36mInput:\x1b[0m ${JSON.stringify(input)}`);
+        console.log('');
+      }
+
+      console.log('Executing...');
+      const startTime = Date.now();
+      const result = await client.invoke(agentName, input);
+      const elapsed = Date.now() - startTime;
+
+      // Use daemon duration if available, else client-side measurement
+      const duration = result.duration_ms ?? elapsed;
+      console.log(`\x1b[36mExecution time:\x1b[0m ${duration}ms\n`);
+
+      // Handle daemon response format: {status, output, duration_ms}
+      const isSuccess = result.status === 'success' || result.success;
+      const output = result.output ?? result.result;
+
+      if (isSuccess) {
+        console.log('\x1b[32m✓\x1b[0m Result:');
+        console.log(JSON.stringify(output, null, 2));
+      } else {
+        const errorMsg = result.error || (typeof output === 'object' && output && 'error' in output ? (output as {error: string}).error : 'Execution failed');
+        console.error(`\x1b[31m✗\x1b[0m Error: ${errorMsg}`);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 program
   .command('shell')
-  .description('Start interactive shell')
+  .description('Start interactive shell (macOS: VM shell)')
   .action(async () => {
-    console.log('\n\x1b[33mShell command not yet implemented\x1b[0m');
+    const { spawn } = await import('node:child_process');
+    const { platform } = await import('node:os');
+
+    if (platform() !== 'darwin') {
+      console.error('\x1b[31mError:\x1b[0m shell command only available on macOS (Lima VM)');
+      console.log('On Linux, use: ssh user@server or orpheus exec <command>');
+      process.exit(1);
+    }
+
+    console.log('Connecting to Orpheus VM...\n');
+    const shell = spawn('limactl', ['shell', 'orpheus'], { stdio: 'inherit' });
+    shell.on('exit', code => process.exit(code || 0));
   });
 
 program
   .command('exec <command...>')
   .description('Execute a command in daemon context')
   .action(async (command: string[]) => {
-    console.log('Command:', command.join(' '));
-    console.log('\n\x1b[33mExec command not yet implemented\x1b[0m');
+    const { execSync } = await import('node:child_process');
+    const { platform } = await import('node:os');
+    const cmd = command.join(' ');
+
+    try {
+      let output: string;
+      if (platform() === 'darwin') {
+        // macOS - execute in Lima VM
+        output = execSync(`limactl shell orpheus -- ${cmd}`, { encoding: 'utf-8' });
+      } else {
+        // Linux - execute directly
+        output = execSync(cmd, { encoding: 'utf-8' });
+      }
+      console.log(output);
+    } catch (err: unknown) {
+      const error = err as { stdout?: string; stderr?: string; message?: string };
+      if (error.stdout) console.log(error.stdout);
+      if (error.stderr) console.error(error.stderr);
+      console.error(`\x1b[31mError:\x1b[0m ${error.message || 'Command failed'}`);
+      process.exit(1);
+    }
   });
 
 //@LOGIN_COMMANDS
@@ -659,23 +821,68 @@ const daemonCommand = program.command('daemon').description('Daemon management (
 
 daemonCommand
   .command('start')
-  .description('Start daemon')
+  .description('Start daemon (systemd)')
   .action(async () => {
-    console.log('\n\x1b[33mDaemon start not yet implemented\x1b[0m');
+    const { execSync } = await import('node:child_process');
+    const { platform } = await import('node:os');
+
+    try {
+      if (platform() === 'darwin') {
+        // macOS - ensure VM is running, then start daemon via systemd
+        console.log('Starting Lima VM...');
+        execSync('limactl start orpheus 2>/dev/null || true', { encoding: 'utf-8' });
+        console.log('Starting daemon...');
+        execSync('limactl shell orpheus -- sudo systemctl start orpheusd 2>/dev/null || true', { encoding: 'utf-8' });
+      } else {
+        // Linux - start directly via systemd
+        execSync('sudo systemctl start orpheusd', { encoding: 'utf-8' });
+      }
+      console.log('\x1b[32m✓\x1b[0m Daemon started');
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 daemonCommand
   .command('stop')
-  .description('Stop daemon')
+  .description('Stop daemon (systemd)')
   .action(async () => {
-    console.log('\n\x1b[33mDaemon stop not yet implemented\x1b[0m');
+    const { execSync } = await import('node:child_process');
+    const { platform } = await import('node:os');
+
+    try {
+      if (platform() === 'darwin') {
+        execSync('limactl shell orpheus -- sudo systemctl stop orpheusd 2>/dev/null || true', { encoding: 'utf-8' });
+      } else {
+        execSync('sudo systemctl stop orpheusd', { encoding: 'utf-8' });
+      }
+      console.log('\x1b[32m✓\x1b[0m Daemon stopped');
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 daemonCommand
   .command('status')
-  .description('Show daemon status')
+  .description('Show daemon status (systemd)')
   .action(async () => {
-    console.log('\n\x1b[33mDaemon status not yet implemented\x1b[0m');
+    const { execSync } = await import('node:child_process');
+    const { platform } = await import('node:os');
+
+    try {
+      let output: string;
+      if (platform() === 'darwin') {
+        output = execSync('limactl shell orpheus -- sudo systemctl status orpheusd 2>&1 || true', { encoding: 'utf-8' });
+      } else {
+        output = execSync('systemctl status orpheusd 2>&1 || true', { encoding: 'utf-8' });
+      }
+      console.log(output);
+    } catch (err: unknown) {
+      const error = err as { stdout?: string };
+      console.log(error.stdout || 'Daemon status unknown');
+    }
   });
 
 //@SERVER_COMMANDS
@@ -683,18 +890,52 @@ const serverCommand = program.command('server').description('TCP server manageme
 
 serverCommand
   .command('start')
-  .description('Start TCP server')
+  .description('Start TCP server (direct process)')
   .option('-p, --port <port>', 'Port number', '7777')
   .action(async (options: { port?: string }) => {
-    console.log('Port:', options.port);
-    console.log('\n\x1b[33mServer start not yet implemented\x1b[0m');
+    const { execSync } = await import('node:child_process');
+    const { platform } = await import('node:os');
+    const port = options.port || '7777';
+
+    try {
+      if (platform() === 'darwin') {
+        // macOS - start daemon in Lima VM
+        execSync(
+          `limactl shell orpheus -- bash -c "nohup /usr/local/bin/orpheusd --tcp-bind :${port} > /var/log/orpheusd.log 2>&1 &"`,
+          { encoding: 'utf-8' }
+        );
+      } else {
+        // Linux - start daemon directly
+        execSync(
+          `nohup /usr/local/bin/orpheusd --tcp-bind :${port} > /var/log/orpheusd.log 2>&1 &`,
+          { encoding: 'utf-8' }
+        );
+      }
+      console.log(`\x1b[32m✓\x1b[0m Server started on port ${port}`);
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 serverCommand
   .command('stop')
-  .description('Stop TCP server')
+  .description('Stop TCP server (kill process)')
   .action(async () => {
-    console.log('\n\x1b[33mServer stop not yet implemented\x1b[0m');
+    const { execSync } = await import('node:child_process');
+    const { platform } = await import('node:os');
+
+    try {
+      if (platform() === 'darwin') {
+        execSync('limactl shell orpheus -- sudo pkill -f orpheusd 2>/dev/null || true', { encoding: 'utf-8' });
+      } else {
+        execSync('pkill -f orpheusd 2>/dev/null || true', { encoding: 'utf-8' });
+      }
+      console.log('\x1b[32m✓\x1b[0m Server stopped');
+    } catch (err) {
+      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 serverCommand

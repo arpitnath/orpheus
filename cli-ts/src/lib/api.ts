@@ -140,7 +140,7 @@ export function createClient(_serverName?: string): OrpheusClient {
       return makeRequest<StatsResponse>('GET', path, serverConfig);
     },
 
-    async deploy(agentPath: string, _options?: DeployOptions): Promise<DeployResponse> {
+    async deploy(agentPath: string, options?: DeployOptions): Promise<DeployResponse> {
       // Validate agent path
       const validation = validateAgentPath(agentPath);
       if (!validation.valid) {
@@ -155,8 +155,8 @@ export function createClient(_serverName?: string): OrpheusClient {
       // Calculate checksum
       const checksum = calculateChecksum(tarball);
 
-      // Upload to daemon
-      return uploadAgent(serverConfig, agentName, tarball, checksum);
+      // Upload to daemon with optional env vars
+      return uploadAgent(serverConfig, agentName, tarball, checksum, options?.env);
     },
 
     async invoke(agentName: string, input: unknown): Promise<InvokeResponse> {
