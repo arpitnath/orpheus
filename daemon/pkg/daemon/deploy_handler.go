@@ -36,11 +36,60 @@ type DependencyInfo struct {
 	Source    string `json:"source,omitempty"` // requirements.txt, package.json
 }
 
+// DeployProgressEvent is sent during SSE streaming deploys.
+type DeployProgressEvent struct {
+	Phase    string `json:"phase"`
+	Message  string `json:"message"`
+	Progress int    `json:"progress"`
+}
+
 // handleDeploy handles POST /v1/deploy for remote agent deployment.
 func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
+	}
+
+	// Check for SSE streaming request
+	useSSE := strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+	var flusher http.Flusher
+	if useSSE {
+		var ok bool
+		flusher, ok = w.(http.Flusher)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "SSE not supported")
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+	}
+
+	// Helper to emit SSE events
+	emit := func(event, phase, msg string, progress int) {
+		if !useSSE {
+			return
+		}
+		data, _ := json.Marshal(DeployProgressEvent{
+			Phase:    phase,
+			Message:  msg,
+			Progress: progress,
+		})
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+		flusher.Flush()
+	}
+
+	// Helper to emit error events
+	emitError := func(phase, errMsg string) {
+		if !useSSE {
+			return
+		}
+		data, _ := json.Marshal(map[string]string{
+			"phase": phase,
+			"error": errMsg,
+		})
+		fmt.Fprintf(w, "event: deploy_error\ndata: %s\n\n", data)
+		flusher.Flush()
 	}
 
 	// Parse multipart form (max 2GB upload)
@@ -103,6 +152,7 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Checksum verified for agent '%s'", agentName)
+	emit("deploy_progress", "extracting", "Extracting agent tarball...", 20)
 
 	// Determine agent directory
 	// Use /var/lib/orpheus/agents/ if it exists, else ~/.orpheus/agents/
@@ -147,7 +197,11 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	// Extract tar to temp directory
 	if err := deploy.ExtractTar(tarFile, tempExtractDir); err != nil {
 		log.Printf("ERROR: Extraction failed: %v", err)
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("extract tar: %v", err))
+		if useSSE {
+			emitError("extracting", fmt.Sprintf("extract tar: %v", err))
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("extract tar: %v", err))
+		}
 		return
 	}
 
@@ -157,18 +211,27 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	// Verify agent.yaml exists
 	agentYAML := filepath.Join(tempAgentDir, "agent.yaml")
 	if _, err := os.Stat(agentYAML); os.IsNotExist(err) {
-		writeError(w, http.StatusBadRequest, "agent.yaml not found in uploaded tar")
+		if useSSE {
+			emitError("validating", "agent.yaml not found in uploaded tar")
+		} else {
+			writeError(w, http.StatusBadRequest, "agent.yaml not found in uploaded tar")
+		}
 		return
 	}
 
 	// Load agent.yaml to get runtime
 	agentConfig, err := config.Load(tempAgentDir)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid agent.yaml: %v", err))
+		if useSSE {
+			emitError("validating", fmt.Sprintf("invalid agent.yaml: %v", err))
+		} else {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid agent.yaml: %v", err))
+		}
 		return
 	}
 
 	log.Printf("Agent runtime: %s", agentConfig.Runtime)
+	emit("deploy_progress", "validating", "Agent configuration valid", 30)
 
 	// Determine base image path based on runtime
 	baseImagePath, err := resolveBaseImagePath(agentConfig.Runtime)
@@ -183,7 +246,11 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Copying base image to %s...", agentDir)
 	if err := copyDir(baseImagePath, agentDir); err != nil {
 		os.RemoveAll(agentDir)
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("copy base image: %v", err))
+		if useSSE {
+			emitError("copying", fmt.Sprintf("copy base image: %v", err))
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("copy base image: %v", err))
+		}
 		return
 	}
 
@@ -192,22 +259,33 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Copying agent code to %s...", agentCodeDir)
 	if err := copyDir(tempAgentDir, agentCodeDir); err != nil {
 		os.RemoveAll(agentDir)
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("copy agent code: %v", err))
+		if useSSE {
+			emitError("copying", fmt.Sprintf("copy agent code: %v", err))
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("copy agent code: %v", err))
+		}
 		return
 	}
+	emit("deploy_progress", "copying", "Base image and agent code ready", 50)
 
 	// Install dependencies based on runtime
 	log.Printf("Installing dependencies for '%s' (runtime: %s)...", agentName, agentConfig.Runtime)
 	depInfo, err := installDependencies(agentConfig.Runtime, agentCodeDir, agentDir)
 	if err != nil {
 		os.RemoveAll(agentDir)
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("install dependencies: %v", err))
+		if useSSE {
+			emitError("installing", fmt.Sprintf("install dependencies: %v", err))
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("install dependencies: %v", err))
+		}
 		return
 	}
 	if depInfo != nil && depInfo.Installed {
 		log.Printf("Dependencies installed for '%s' from %s", agentName, depInfo.Source)
+		emit("deploy_progress", "installing", fmt.Sprintf("Dependencies installed from %s", depInfo.Source), 70)
 	} else {
 		log.Printf("No dependencies to install for '%s'", agentName)
+		emit("deploy_progress", "installing", "No dependencies required", 70)
 	}
 
 	log.Printf("Deployed agent '%s' with base image merge", agentName)
@@ -255,6 +333,7 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Created autoscaling pool for agent '%s'", agentName)
 		}
 	}
+	emit("deploy_progress", "registering", "Agent registered in pool", 90)
 
 	// Build endpoint URLs (NEW RESTful format)
 	serverDomain := r.Host // Use request host for now
@@ -263,7 +342,7 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		"mcp":  fmt.Sprintf("mcp://%s/mcp/%s/agents/%s", serverDomain, orgID, agentName),
 	}
 
-	// Return success response
+	// Build success response
 	response := DeployResponse{
 		AgentName:    agentName,
 		Status:       "deployed",
@@ -273,7 +352,15 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		Dependencies: depInfo,
 	}
 
-	writeJSON(w, http.StatusOK, response)
+	// Return response based on mode
+	if useSSE {
+		// Emit deploy_complete event with full response
+		data, _ := json.Marshal(response)
+		fmt.Fprintf(w, "event: deploy_complete\ndata: %s\n\n", data)
+		flusher.Flush()
+	} else {
+		writeJSON(w, http.StatusOK, response)
+	}
 	log.Printf("Agent '%s' deployed successfully (%d MB)", agentName, sizeMB)
 }
 

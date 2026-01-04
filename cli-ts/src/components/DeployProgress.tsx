@@ -1,7 +1,8 @@
 //@DEPLOY_PROGRESS
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useApp } from 'ink';
 import { Spinner } from './common/Spinner.js';
+import type { DeployProgressEvent } from '../lib/deploy.js';
 
 type StepStatus = 'pending' | 'running' | 'completed' | 'error';
 
@@ -27,11 +28,25 @@ interface DeployResult {
   error?: string;
 }
 
+// Callback type for SSE-enabled deploy
+type DeployWithProgressFn = (
+  onProgress: (event: DeployProgressEvent) => void
+) => Promise<DeployResult>;
+
 interface DeployProgressProps {
   agentName: string;
   agentPath: string;
-  onDeploy: () => Promise<DeployResult>;
+  onDeploy: DeployWithProgressFn;
 }
+
+// Map daemon phases to step indices
+const PHASE_TO_STEP: Record<string, number> = {
+  extracting: 1,   // Packaging agent files (extraction on daemon)
+  validating: 1,   // Still in packaging phase
+  copying: 2,      // Uploading to daemon (copying base image)
+  installing: 3,   // Installing dependencies
+  registering: 4,  // Registering agent
+};
 
 //@STEP_ICON
 const StepIcon: React.FC<{ status: StepStatus }> = ({ status }) => {
@@ -71,56 +86,66 @@ export const DeployProgress: React.FC<DeployProgressProps> = ({
     });
   };
 
+  // Track the last completed step to avoid re-running transitions
+  const lastCompletedStep = useRef(-1);
+
   useEffect(() => {
     const runDeploy = async () => {
       try {
-        // Step 1: Validate
+        // Step 0: Validate (CLI-side, quick)
         updateStep(0, 'running');
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 100)); // Minimal delay for UI
         updateStep(0, 'completed');
+        lastCompletedStep.current = 0;
 
-        // Step 2: Package
+        // Step 1: Package (CLI-side, quick)
         updateStep(1, 'running');
-        await new Promise(r => setTimeout(r, 600));
-        updateStep(1, 'completed');
 
-        // Step 3: Upload (starts the actual deploy)
-        updateStep(2, 'running');
+        // Handle progress events from daemon
+        const handleProgress = (event: DeployProgressEvent) => {
+          const stepIndex = PHASE_TO_STEP[event.phase];
+          if (stepIndex === undefined) return;
 
-        // onDeploy() does: tarball creation, upload, daemon processes (install deps, register)
-        // We show steps 3-5 progressing during this single call
-        const deployPromise = onDeploy();
+          // Complete all previous steps
+          for (let i = 0; i <= stepIndex - 1; i++) {
+            if (i > lastCompletedStep.current) {
+              updateStep(i, 'completed');
+              lastCompletedStep.current = i;
+            }
+          }
 
-        // After a short delay, show upload complete and deps installing
-        await new Promise(r => setTimeout(r, 800));
-        updateStep(2, 'completed');
+          // Mark current step as running
+          updateStep(stepIndex, 'running');
+        };
 
-        // Step 4: Installing dependencies (daemon-side)
-        updateStep(3, 'running');
+        // Call deploy with progress callback
+        const deployResult = await onDeploy(handleProgress);
 
-        // After another delay, show deps complete and registering
-        await new Promise(r => setTimeout(r, 1500));
-        updateStep(3, 'completed');
-
-        // Step 5: Registering agent
-        updateStep(4, 'running');
-
-        // Wait for actual deploy to complete
-        const deployResult = await deployPromise;
-
+        // Mark all remaining steps as completed on success
         if (deployResult.success) {
-          updateStep(4, 'completed');
+          for (let i = 0; i < 5; i++) {
+            updateStep(i, 'completed');
+          }
           setResult(deployResult);
         } else {
-          updateStep(4, 'error', deployResult.error);
+          // Find current running step and mark as error
+          const currentStep = steps.findIndex(s => s.status === 'running');
+          if (currentStep >= 0) {
+            updateStep(currentStep, 'error', deployResult.error);
+          }
           setResult(deployResult);
         }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        const currentStep = steps.findIndex(s => s.status === 'running');
-        if (currentStep >= 0) {
-          updateStep(currentStep, 'error', errorMsg);
-        }
+        // Find current running step and mark as error
+        setSteps(prev => {
+          const next = [...prev];
+          const runningIdx = next.findIndex(s => s.status === 'running');
+          if (runningIdx >= 0) {
+            next[runningIdx] = { ...next[runningIdx], status: 'error', error: errorMsg };
+          }
+          return next;
+        });
         setResult({ success: false, error: errorMsg });
       }
 

@@ -184,6 +184,187 @@ export async function uploadAgent(
   });
 }
 
+//@SSE_DEPLOY_PROGRESS
+export interface DeployProgressEvent {
+  phase: string;
+  message: string;
+  progress: number;
+}
+
+export type DeployProgressCallback = (event: DeployProgressEvent) => void;
+
+//@SSE_UPLOAD
+export async function uploadAgentWithSSE(
+  serverConfig: ServerConfig,
+  agentName: string,
+  tarball: Buffer,
+  checksum: string,
+  env?: string[],
+  onProgress?: DeployProgressCallback
+): Promise<DeployResponse> {
+  const boundary = '----FormBoundary' + randomBytes(16).toString('hex');
+
+  // Build multipart form data (same as uploadAgent)
+  const parts: Buffer[] = [];
+
+  parts.push(Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="agent_name"\r\n\r\n` +
+    `${agentName}\r\n`
+  ));
+
+  parts.push(Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="checksum"\r\n\r\n` +
+    `${checksum}\r\n`
+  ));
+
+  if (env && env.length > 0) {
+    parts.push(Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="env"\r\n\r\n` +
+      `${JSON.stringify(env)}\r\n`
+    ));
+  }
+
+  parts.push(Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="agent_tar"; filename="${agentName}.tar.gz"\r\n` +
+    `Content-Type: application/gzip\r\n\r\n`
+  ));
+  parts.push(tarball);
+  parts.push(Buffer.from('\r\n'));
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+
+  const body = Buffer.concat(parts);
+
+  return new Promise((resolve, reject) => {
+    let options: RequestOptions;
+    let requestFn: typeof httpRequest;
+
+    if (serverConfig.mode === 'unix_socket') {
+      const socketPath = serverConfig.socket_path;
+      if (!socketPath) {
+        reject(new Error('Socket path not configured'));
+        return;
+      }
+
+      options = {
+        socketPath,
+        path: '/v1/deploy',
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length,
+          'Accept': 'text/event-stream',
+        },
+      };
+      requestFn = httpRequest;
+    } else {
+      const url = serverConfig.url;
+      if (!url) {
+        reject(new Error('Server URL not configured'));
+        return;
+      }
+
+      const parsedUrl = new URL('/v1/deploy', url);
+      const isHttps = parsedUrl.protocol === 'https:';
+
+      options = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (isHttps ? 443 : 80),
+        path: parsedUrl.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length,
+          'Accept': 'text/event-stream',
+          ...(serverConfig.auth_key && {
+            Authorization: `Bearer ${serverConfig.auth_key}`,
+          }),
+        },
+      };
+      requestFn = isHttps ? httpsRequest : httpRequest;
+    }
+
+    const req = requestFn(options, (res) => {
+      let buffer = '';
+      let result: DeployResponse | null = null;
+
+      res.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString();
+
+        // Parse SSE events from buffer
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+        let currentEvent = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (currentEvent === 'deploy_progress' && onProgress) {
+                onProgress({
+                  phase: data.phase,
+                  message: data.message,
+                  progress: data.progress,
+                });
+              } else if (currentEvent === 'deploy_complete') {
+                result = data as DeployResponse;
+              } else if (currentEvent === 'deploy_error') {
+                reject(new Error(data.error || 'Deploy failed'));
+                return;
+              }
+            } catch {
+              // Ignore parse errors for incomplete data
+            }
+            currentEvent = '';
+          }
+        }
+      });
+
+      res.on('end', () => {
+        if (result) {
+          resolve(result);
+        } else if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+          // Fallback: try to parse as JSON if no SSE result
+          try {
+            const parsed = JSON.parse(buffer) as DeployResponse;
+            resolve(parsed);
+          } catch {
+            reject(new Error('No valid response received'));
+          }
+        } else {
+          let errorMessage = `HTTP ${res.statusCode}`;
+          try {
+            const errorData = JSON.parse(buffer);
+            errorMessage = errorData.error || errorData.message || errorMessage;
+          } catch {
+            if (buffer) errorMessage = buffer;
+          }
+          reject(new Error(errorMessage));
+        }
+      });
+    });
+
+    req.on('error', (err: Error) => {
+      if ((err as NodeJS.ErrnoException).code === 'ECONNREFUSED') {
+        reject(new Error('Cannot connect to daemon. Is it running?'));
+      } else if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        reject(new Error('Daemon socket not found. Is the daemon running?'));
+      } else {
+        reject(err);
+      }
+    });
+
+    req.write(body);
+    req.end();
+  });
+}
+
 //@VALIDATE_AGENT_PATH
 export function validateAgentPath(agentPath: string): { valid: boolean; error?: string; agentName?: string } {
   const resolvedPath = resolve(agentPath);

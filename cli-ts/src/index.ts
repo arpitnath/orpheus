@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import { createClient, testConnection, getHealth, getStats } from './lib/api.js';
 import {
   getActiveServerName,
+  getActiveServer,
   getDefaultSocketPath,
   socketExists,
   listServers,
@@ -12,6 +13,13 @@ import {
   removeServer,
   setActiveServer,
 } from './lib/config.js';
+import {
+  createTarball,
+  calculateChecksum,
+  validateAgentPath,
+  uploadAgentWithSSE,
+  type DeployProgressEvent,
+} from './lib/deploy.js';
 import {
   checkMacOS,
   checkLimaInstalled,
@@ -82,11 +90,32 @@ program
     const resolvedPath = path.resolve(agentPath);
     const agentName = path.basename(resolvedPath);
 
-    // TUI deploy progress
-    const onDeploy = async () => {
+    // Validate agent path upfront
+    const validation = validateAgentPath(resolvedPath);
+    if (!validation.valid) {
+      console.error(`\x1b[31mError:\x1b[0m ${validation.error}`);
+      process.exit(1);
+    }
+
+    // TUI deploy with SSE progress streaming
+    const onDeploy = async (onProgress: (event: DeployProgressEvent) => void) => {
       try {
-        const client = createClient();
-        const result = await client.deploy(resolvedPath, { force: options.force, env: options.env });
+        const serverConfig = getActiveServer();
+
+        // Create tarball and checksum
+        const tarball = await createTarball(resolvedPath);
+        const checksum = calculateChecksum(tarball);
+
+        // Deploy with SSE progress streaming
+        const result = await uploadAgentWithSSE(
+          serverConfig,
+          agentName,
+          tarball,
+          checksum,
+          options.env,
+          onProgress
+        );
+
         return {
           success: result.status === 'deployed',
           endpoints: result.endpoints,
