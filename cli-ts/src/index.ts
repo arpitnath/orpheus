@@ -31,6 +31,7 @@ import {
 } from './lib/vm.js';
 import { renderApp } from './lib/render.js';
 import { DeployProgress } from './components/DeployProgress.js';
+import { c, sym, ok, err as fmtErr, warn, info, label, table, box, statusDot } from './lib/format.js';
 
 //@VERSION
 const VERSION = '0.1.0';
@@ -49,33 +50,35 @@ program
   .command('status')
   .description('Show system status and health')
   .action(async () => {
-    // Text output
-    console.log('Orpheus Status\n');
+    const lines: string[] = [];
     const activeServer = getActiveServerName();
-    console.log(`Server: ${activeServer}`);
+    lines.push(label('Server', activeServer));
 
     if (!socketExists()) {
-      console.log('Daemon: \x1b[31mnot running\x1b[0m (socket not found)');
-      console.log(`Socket: ${getDefaultSocketPath()}`);
+      lines.push(label('Daemon', `${c.red}not running${c.reset}`));
+      lines.push(label('Socket', getDefaultSocketPath()));
+      console.log(box('Orpheus Status', lines.join('\n')));
       return;
     }
 
     const health = await getHealth();
     if (health) {
-      const statusColor = health.status === 'healthy' ? '\x1b[32m' : '\x1b[33m';
-      console.log(`Daemon: ${statusColor}${health.status}\x1b[0m`);
-      console.log(`Uptime: ${formatUptime(health.uptime_seconds)}`);
+      lines.push(label('Daemon', `${statusDot(health.status)} ${health.status}`));
+      lines.push(label('Uptime', formatUptime(health.uptime_seconds)));
 
       await new Promise(resolve => setTimeout(resolve, 50));
       const stats = await getStats();
       if (stats && stats.global) {
-        console.log(`\nAgents: ${stats.global.total_agents} deployed`);
-        console.log(`Workers: ${stats.global.total_workers} total`);
-        console.log(`Pending: ${stats.global.total_pending} requests`);
+        lines.push('');
+        lines.push(label('Agents', `${stats.global.total_agents} deployed`));
+        lines.push(label('Workers', `${stats.global.total_workers} total`));
+        lines.push(label('Pending', `${stats.global.total_pending} requests`));
       }
     } else {
-      console.log('Daemon: \x1b[31mnot responding\x1b[0m');
+      lines.push(label('Daemon', `${c.red}not responding${c.reset}`));
     }
+
+    console.log(box('Orpheus Status', lines.join('\n')));
   });
 
 program
@@ -211,27 +214,27 @@ program
     const result = validateAgentYaml(agentPath);
 
     if (result.valid) {
-      console.log('\x1b[32m✓\x1b[0m Valid agent.yaml');
+      console.log(ok('Valid agent.yaml'));
       if (result.config) {
-        console.log(`  Name: ${result.config.name}`);
-        console.log(`  Runtime: ${result.config.runtime}`);
-        console.log(`  Module: ${result.config.module}`);
-        console.log(`  Entrypoint: ${result.config.entrypoint}`);
+        console.log(`  ${label('Name', result.config.name, 14)}`);
+        console.log(`  ${label('Runtime', result.config.runtime, 14)}`);
+        console.log(`  ${label('Module', result.config.module, 14)}`);
+        console.log(`  ${label('Entrypoint', result.config.entrypoint, 14)}`);
         if (result.config.scaling) {
-          console.log(`  Scaling: ${result.config.scaling.min_workers}-${result.config.scaling.max_workers} workers`);
+          console.log(`  ${label('Scaling', `${result.config.scaling.min_workers}-${result.config.scaling.max_workers} workers`, 14)}`);
         }
       }
     } else {
-      console.log('\x1b[31m✗\x1b[0m Invalid agent.yaml');
+      console.log(fmtErr('Invalid agent.yaml'));
       for (const error of result.errors) {
-        console.log(`  \x1b[31m•\x1b[0m ${error}`);
+        console.log(`  ${c.red}${sym.bullet}${c.reset} ${error}`);
       }
     }
 
     if (result.warnings.length > 0) {
       console.log('\nWarnings:');
       for (const warning of result.warnings) {
-        console.log(`  \x1b[33m•\x1b[0m ${warning}`);
+        console.log(`  ${c.yellow}${sym.bullet}${c.reset} ${warning}`);
       }
     }
 
@@ -319,7 +322,7 @@ program
   .action(async (options: { images?: boolean }) => {
     if (options.images) {
       console.log('Base images:');
-      console.log('\n\x1b[33mImages listing not yet implemented\x1b[0m');
+      console.log(`\n${c.yellow}Images listing not yet implemented${c.reset}`);
       return;
     }
 
@@ -328,22 +331,22 @@ program
       const agents = await client.list();
 
       if (agents.length === 0) {
-        console.log('No agents deployed');
+        console.log(info('No agents deployed'));
         return;
       }
 
-      console.log('Deployed Agents:\n');
-      console.log('NAME                RUNTIME     STATUS');
-      console.log('─'.repeat(45));
-      for (const agent of agents) {
-        const name = (agent.name || 'unknown').padEnd(20);
-        const runtime = (agent.runtime || 'python3').padEnd(12);
+      console.log(`${c.bold}Deployed Agents${c.reset}\n`);
+      const rows = agents.map(agent => {
         const status = agent.status || 'deployed';
-        const statusColor = status === 'running' ? '\x1b[32m' : status === 'idle' ? '\x1b[33m' : '\x1b[36m';
-        console.log(`${name}${runtime}${statusColor}${status}\x1b[0m`);
-      }
+        return [
+          agent.name || 'unknown',
+          agent.runtime || 'python3',
+          `${statusDot(status)} ${status}`,
+        ];
+      });
+      console.log(table(['NAME', 'RUNTIME', 'STATUS'], rows, [24, 14, 16]));
     } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
   });
@@ -356,30 +359,33 @@ program
     try {
       const stats = await getStats(agent);
       if (!stats) {
-        console.error('\x1b[31mError:\x1b[0m Cannot connect to daemon');
+        console.error(`${c.red}Error:${c.reset} Cannot connect to daemon`);
         process.exit(1);
       }
 
-      console.log('Pool Statistics\n');
-      console.log(`Total Agents: ${stats.global.total_agents}`);
-      console.log(`Total Workers: ${stats.global.total_workers}`);
-      console.log(`Pending Requests: ${stats.global.total_pending}`);
-      console.log(`Processing: ${stats.global.total_processing}`);
-      console.log(`Average Utilization: ${stats.global.average_utilization.toFixed(1)}%`);
+      // Global stats
+      const globalLines = [
+        label('Agents', String(stats.global.total_agents)),
+        label('Workers', String(stats.global.total_workers)),
+        label('Pending', String(stats.global.total_pending)),
+        label('Processing', String(stats.global.total_processing)),
+        label('Utilization', `${stats.global.average_utilization.toFixed(1)}%`),
+      ];
+      console.log(box('Pool Statistics', globalLines.join('\n')));
 
       if (stats.agents && stats.agents.length > 0) {
-        console.log('\nPer-Agent Stats:');
-        console.log('AGENT\t\t\t\tWORKERS\tPENDING\tPROCESSING\tUTILIZATION');
-        console.log('─'.repeat(70));
-        for (const a of stats.agents) {
-          const name = a.agent_name.length > 20 ? a.agent_name.slice(0, 17) + '...' : a.agent_name.padEnd(20);
-          console.log(
-            `${name}\t\t${a.pool.total_workers}\t${a.queue.pending}\t${a.queue.processing}\t\t${a.derived.utilization_percentage.toFixed(1)}%`
-          );
-        }
+        console.log(`\n${c.bold}Per-Agent Stats${c.reset}\n`);
+        const rows = stats.agents.map(a => [
+          a.agent_name.length > 22 ? a.agent_name.slice(0, 19) + '...' : a.agent_name,
+          String(a.pool.total_workers),
+          String(a.queue.pending),
+          String(a.queue.processing),
+          `${a.derived.utilization_percentage.toFixed(1)}%`,
+        ]);
+        console.log(table(['AGENT', 'WORKERS', 'PENDING', 'PROC', 'UTIL'], rows, [24, 10, 10, 8, 8]));
       }
     } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
   });
@@ -398,26 +404,33 @@ program
         return;
       }
 
-      // Text format (default)
-      console.log(`Agent: ${details.name}`);
-      console.log(`Runtime: ${details.runtime}`);
-      console.log(`Module: ${details.module}`);
-      console.log(`Entrypoint: ${details.entrypoint}`);
+      // Text format (default) - box layout
+      const lines: string[] = [];
+      lines.push(label('Runtime', details.runtime));
+      lines.push(label('Module', details.module));
+      lines.push(label('Entrypoint', details.entrypoint));
+      lines.push('');
 
-      console.log('\nEndpoints:');
-      console.log(`  HTTP: ${details.endpoints.http}`);
-      if (details.endpoints.mcp) {
-        console.log(`  MCP:  ${details.endpoints.mcp}`);
+      if (details.endpoints?.http) {
+        lines.push(label('HTTP', details.endpoints.http));
+        if (details.endpoints.mcp) {
+          lines.push(label('MCP', details.endpoints.mcp));
+        }
+      } else {
+        lines.push(`${c.dim}Endpoints not available${c.reset}`);
       }
+      lines.push('');
 
-      console.log('\nScaling:');
-      console.log(`  Workers: ${details.workers}${details.scaling ? ` (min: ${details.scaling.min_workers}, max: ${details.scaling.max_workers})` : ''}`);
-
-      const statusColor = details.status === 'running' ? '\x1b[32m' : details.status === 'idle' ? '\x1b[33m' : '\x1b[31m';
-      console.log(`\nStatus: ${statusColor}${details.status}\x1b[0m`);
+      const scalingInfo = details.scaling
+        ? `${details.workers} (min: ${details.scaling.min_workers}, max: ${details.scaling.max_workers})`
+        : `${details.workers}`;
+      lines.push(label('Workers', scalingInfo));
+      lines.push(label('Status', `${statusDot(details.status)} ${details.status}`));
       if (details.deployed_at) {
-        console.log(`Deployed: ${details.deployed_at}`);
+        lines.push(label('Deployed', details.deployed_at));
       }
+
+      console.log(box(details.name, lines.join('\n')));
     } catch (err) {
       console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -434,21 +447,21 @@ program
       const agents = await client.list();
 
       if (agents.length === 0) {
-        console.log('No agents deployed');
+        console.log(info('No agents deployed'));
         return;
       }
 
-      console.log('NAME                RUNTIME     STATUS');
-      console.log('─'.repeat(45));
-      for (const agent of agents) {
-        const name = (agent.name || 'unknown').padEnd(20);
-        const runtime = (agent.runtime || 'python3').padEnd(12);
+      const rows = agents.map(agent => {
         const status = agent.status || 'deployed';
-        const statusColor = status === 'running' ? '\x1b[32m' : status === 'idle' ? '\x1b[33m' : '\x1b[36m';
-        console.log(`${name}${runtime}${statusColor}${status}\x1b[0m`);
-      }
+        return [
+          agent.name || 'unknown',
+          agent.runtime || 'python3',
+          `${statusDot(status)} ${status}`,
+        ];
+      });
+      console.log(table(['NAME', 'RUNTIME', 'STATUS'], rows, [24, 14, 16]));
     } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
   });
@@ -512,7 +525,7 @@ program
   .description('Run system health diagnostics')
   .option('--fix', 'Attempt to fix issues')
   .action(async (_options: { fix?: boolean }) => {
-    console.log('Running health checks...\n');
+    console.log(`${c.bold}Health Checks${c.reset}\n`);
 
     let allPassed = true;
     const { platform } = await import('node:os');
@@ -521,17 +534,17 @@ program
     // Check 1: Config exists
     const configValid = socketExists() || getActiveServerName() !== 'local';
     if (configValid) {
-      console.log('\x1b[32m✓\x1b[0m Config valid');
+      console.log(ok('Config valid'));
     } else {
-      console.log('\x1b[33m!\x1b[0m Config: using defaults');
+      console.log(warn('Config: using defaults'));
     }
 
     // Check 2: Daemon reachable
     const connected = await testConnection();
     if (connected) {
-      console.log('\x1b[32m✓\x1b[0m Daemon reachable');
+      console.log(ok('Daemon reachable'));
     } else {
-      console.log('\x1b[31m✗\x1b[0m Daemon not reachable');
+      console.log(fmtErr('Daemon not reachable'));
       allPassed = false;
     }
 
@@ -539,9 +552,9 @@ program
     if (connected) {
       const health = await getHealth();
       if (health && health.status === 'healthy') {
-        console.log(`\x1b[32m✓\x1b[0m Daemon healthy (uptime: ${formatUptime(health.uptime_seconds)})`);
+        console.log(ok(`Daemon healthy (uptime: ${formatUptime(health.uptime_seconds)})`));
       } else if (health) {
-        console.log(`\x1b[33m!\x1b[0m Daemon ${health.status}`);
+        console.log(warn(`Daemon ${health.status}`));
       }
     }
 
@@ -553,22 +566,22 @@ program
         const vms = Array.isArray(parsed) ? parsed : [parsed];
         const orpheusVm = vms.find((vm: { name: string }) => vm.name === 'orpheus');
         if (orpheusVm && orpheusVm.status === 'Running') {
-          console.log('\x1b[32m✓\x1b[0m Lima VM running');
+          console.log(ok('Lima VM running'));
         } else if (orpheusVm) {
-          console.log(`\x1b[33m!\x1b[0m Lima VM ${orpheusVm.status.toLowerCase()}`);
+          console.log(warn(`Lima VM ${orpheusVm.status.toLowerCase()}`));
         } else {
-          console.log('\x1b[33m!\x1b[0m Lima VM not found');
+          console.log(warn('Lima VM not found'));
         }
       } catch {
-        console.log('\x1b[33m!\x1b[0m Lima not installed or not configured');
+        console.log(warn('Lima not installed or not configured'));
       }
     }
 
     console.log('');
     if (allPassed) {
-      console.log('\x1b[32mAll checks passed!\x1b[0m');
+      console.log(`${c.green}All checks passed!${c.reset}`);
     } else {
-      console.log('\x1b[31mSome checks failed\x1b[0m');
+      console.log(`${c.red}Some checks failed${c.reset}`);
       process.exit(1);
     }
   });
@@ -673,10 +686,10 @@ loginCommand
     const servers = listServers();
     const active = getActiveServerName();
 
-    console.log('Configured Servers:\n');
+    console.log(`${c.bold}Configured Servers${c.reset}\n`);
     for (const [name, config] of Object.entries(servers)) {
-      const marker = name === active ? '\x1b[32m→\x1b[0m' : ' ';
-      const mode = config.mode === 'unix_socket' ? 'socket' : 'tcp';
+      const marker = name === active ? `${c.green}${sym.arrow}${c.reset}` : ' ';
+      const mode = config.mode === 'unix_socket' ? `${c.dim}socket${c.reset}` : `${c.dim}tcp${c.reset}`;
       const endpoint = config.mode === 'unix_socket' ? config.socket_path : config.url;
       console.log(`${marker} ${name} (${mode}): ${endpoint}`);
     }
@@ -689,13 +702,13 @@ loginCommand
   .action(async (name: string, url: string, options: { key?: string }) => {
     try {
       addServer(name, url, options.key);
-      console.log(`\x1b[32m✓\x1b[0m Added server: ${name}`);
-      console.log(`  URL: ${url}`);
+      console.log(ok(`Added server: ${name}`));
+      console.log(`  ${label('URL', url)}`);
       if (options.key) {
-        console.log(`  Auth: configured`);
+        console.log(`  ${label('Auth', 'configured')}`);
       }
     } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
   });
@@ -706,9 +719,9 @@ loginCommand
   .action(async (name: string) => {
     try {
       setActiveServer(name);
-      console.log(`\x1b[32m✓\x1b[0m Active server set to: ${name}`);
+      console.log(ok(`Active server set to: ${name}`));
     } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
   });
@@ -719,9 +732,9 @@ loginCommand
   .action(async (name: string) => {
     try {
       removeServer(name);
-      console.log(`\x1b[32m✓\x1b[0m Removed server: ${name}`);
+      console.log(ok(`Removed server: ${name}`));
     } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
   });
