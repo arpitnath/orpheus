@@ -340,7 +340,7 @@ program
         const status = agent.status || 'deployed';
         return [
           agent.name || 'unknown',
-          agent.runtime || 'python3',
+          agent.runtime || `${c.dim}unknown${c.reset}`,
           `${statusDot(status)} ${status}`,
         ];
       });
@@ -363,26 +363,48 @@ program
         process.exit(1);
       }
 
-      // Global stats
+      // Defensive: check if global stats exist
+      if (!stats.global) {
+        console.error(`${c.red}Error:${c.reset} Invalid response from daemon (missing global stats)`);
+        process.exit(1);
+      }
+
+      // Global stats with safe defaults
+      const g = stats.global;
       const globalLines = [
-        label('Agents', String(stats.global.total_agents)),
-        label('Workers', String(stats.global.total_workers)),
-        label('Pending', String(stats.global.total_pending)),
-        label('Processing', String(stats.global.total_processing)),
-        label('Utilization', `${stats.global.average_utilization.toFixed(1)}%`),
+        label('Agents', String(g.total_agents ?? 0)),
+        label('Workers', String(g.total_workers ?? 0)),
+        label('Pending', String(g.total_pending ?? 0)),
+        label('Processing', String(g.total_processing ?? 0)),
+        label('Utilization', `${(g.average_utilization ?? 0).toFixed(1)}%`),
       ];
       console.log(box('Pool Statistics', globalLines.join('\n')));
 
       if (stats.agents && stats.agents.length > 0) {
-        console.log(`\n${c.bold}Per-Agent Stats${c.reset}\n`);
-        const rows = stats.agents.map(a => [
-          a.agent_name.length > 22 ? a.agent_name.slice(0, 19) + '...' : a.agent_name,
-          String(a.pool.total_workers),
-          String(a.queue.pending),
-          String(a.queue.processing),
-          `${a.derived.utilization_percentage.toFixed(1)}%`,
-        ]);
-        console.log(table(['AGENT', 'WORKERS', 'PENDING', 'PROC', 'UTIL'], rows, [24, 10, 10, 8, 8]));
+        // Separate agents with pools from those without
+        const agentsWithPools = stats.agents.filter(a => a.pool && a.queue && a.derived);
+        const agentsWithoutPools = stats.agents.filter(a => !a.pool || !a.queue || !a.derived);
+
+        if (agentsWithPools.length > 0) {
+          console.log(`\n${c.bold}Per-Agent Stats${c.reset}\n`);
+          const rows = agentsWithPools.map(a => [
+            a.agent_name.length > 22 ? a.agent_name.slice(0, 19) + '...' : a.agent_name,
+            String(a.pool!.total_workers),
+            String(a.queue!.pending),
+            String(a.queue!.processing),
+            `${a.derived!.utilization_percentage.toFixed(1)}%`,
+          ]);
+          console.log(table(['AGENT', 'WORKERS', 'PENDING', 'PROC', 'UTIL'], rows, [24, 10, 10, 8, 8]));
+        }
+
+        // Show agents without pools (legacy agents)
+        if (agentsWithoutPools.length > 0) {
+          console.log(`\n${c.dim}Agents without pools (legacy):${c.reset}`);
+          for (const a of agentsWithoutPools) {
+            const status = a.pool_status || 'not_available';
+            console.log(`  ${c.dim}•${c.reset} ${a.agent_name} ${c.dim}(${status})${c.reset}`);
+          }
+        }
       }
     } catch (err) {
       console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
@@ -455,7 +477,7 @@ program
         const status = agent.status || 'deployed';
         return [
           agent.name || 'unknown',
-          agent.runtime || 'python3',
+          agent.runtime || `${c.dim}unknown${c.reset}`,
           `${statusDot(status)} ${status}`,
         ];
       });
@@ -555,6 +577,10 @@ program
         console.log(ok(`Daemon healthy (uptime: ${formatUptime(health.uptime_seconds)})`));
       } else if (health) {
         console.log(warn(`Daemon ${health.status}`));
+        allPassed = false;
+      } else {
+        console.log(fmtErr('Daemon health check failed'));
+        allPassed = false;
       }
     }
 
@@ -757,6 +783,25 @@ vmCommand
     try {
       startVM();
       console.log('\x1b[32m✓\x1b[0m VM started');
+
+      // Wait for daemon to be ready (up to 30 seconds)
+      process.stdout.write(`${c.dim}Waiting for daemon...${c.reset}`);
+      let daemonReady = false;
+      for (let i = 0; i < 30; i++) {
+        if (await testConnection()) {
+          daemonReady = true;
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        process.stdout.write('.');
+      }
+      console.log(''); // newline
+
+      if (daemonReady) {
+        console.log('\x1b[32m✓\x1b[0m Daemon ready');
+      } else {
+        console.log('\x1b[33m⚠\x1b[0m Daemon not responding yet (may still be starting)');
+      }
     } catch (err) {
       console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
       process.exit(1);

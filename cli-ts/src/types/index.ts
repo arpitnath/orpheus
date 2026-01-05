@@ -55,13 +55,17 @@ export interface PoolInfo {
 export interface AgentStats {
   agent_name: string;
   created_at: string;
-  queue: QueueStats;
-  pool: PoolInfo;
-  derived: {
+  // Optional - may not exist for agents without pools (backward compat)
+  queue?: QueueStats;
+  pool?: PoolInfo;
+  derived?: {
     utilization_percentage: number;
     requests_per_worker: number;
     pool_efficiency: string;
   };
+  // Backward compatibility fields for legacy agents
+  pool_status?: string;  // "not_available" or "disabled"
+  message?: string;
 }
 
 export interface GlobalStats {

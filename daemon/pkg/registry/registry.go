@@ -12,6 +12,7 @@ import (
 // RegisteredAgent represents a deployed agent's metadata.
 type RegisteredAgent struct {
 	Name        string    `json:"name"`         // Agent name (unique identifier)
+	Runtime     string    `json:"runtime"`      // Runtime type (python3, nodejs20)
 	Path        string    `json:"path"`         // Server-side agent directory path
 	ResolvedEnv []string  `json:"resolved_env"` // Pre-resolved environment variables
 	CreatedAt   time.Time `json:"created_at"`

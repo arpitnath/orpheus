@@ -311,6 +311,7 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	if s.registry != nil {
 		regErr := s.registry.Register(registry.RegisteredAgent{
 			Name:        agentName,
+			Runtime:     agentConfig.Runtime,
 			Path:        agentCodeDir, // Points to /agent subdirectory for config loading
 			ResolvedEnv: resolvedEnv,
 		})
