@@ -2,7 +2,8 @@
 import React from 'react';
 import { Box, Text, useApp } from 'ink';
 import { useAgentList, useStats, useKeyboardNavigation } from '../hooks/index.js';
-import { Spinner, StatusDot, ErrorBox } from './common/index.js';
+import { Spinner, StatusBadge, WorkerDots, ErrorBox } from './common/index.js';
+import type { BadgeStatus } from './common/index.js';
 import type { AgentListItem, AgentStats } from '../types/index.js';
 
 //@HELPERS
@@ -18,8 +19,12 @@ function getAgentStatus(agent: AgentListItem, agentStats?: AgentStats): 'running
   return 'idle';
 }
 
-function getWorkerCount(agentStats?: AgentStats): number {
-  return agentStats?.pool?.total_workers ?? 0;
+function getBusyWorkers(agentStats?: AgentStats): number {
+  return agentStats?.pool?.busy_workers ?? 0;
+}
+
+function getMaxWorkers(agentStats?: AgentStats): number {
+  return agentStats?.pool?.desired_size ?? 10;
 }
 
 function getQueueDepth(agentStats?: AgentStats): number {
@@ -29,9 +34,9 @@ function getQueueDepth(agentStats?: AgentStats): number {
 //@EMPTY_STATE
 const EmptyState: React.FC = () => (
   <Box flexDirection="column" paddingY={1}>
-    <Text bold>Running Agents (0)</Text>
+    <Text bold>Agent Pools (0)</Text>
     <Box marginTop={1} />
-    <Text dimColor>No agents running.</Text>
+    <Text dimColor>No agent pools running.</Text>
     <Box marginTop={1} />
     <Text dimColor>Deploy an agent:</Text>
     <Text>  orpheus deploy ./my-agent</Text>
@@ -73,12 +78,11 @@ const AgentRow: React.FC<AgentRowProps> = ({
   serverUrl,
 }) => {
   const status = getAgentStatus(agent, agentStats);
-  const workers = getWorkerCount(agentStats);
+  const busyWorkers = getBusyWorkers(agentStats);
+  const maxWorkers = getMaxWorkers(agentStats);
   const queue = getQueueDepth(agentStats);
-  const maxWorkers = agentStats?.pool?.desired_size ?? 10;
 
   const indicator = isExpanded ? '▼' : isSelected ? '▶' : ' ';
-  const workerText = workers === 1 ? '1 worker' : `${workers} workers`;
 
   return (
     <Box flexDirection="column">
@@ -86,9 +90,10 @@ const AgentRow: React.FC<AgentRowProps> = ({
       <Box>
         <Text color={isSelected ? 'cyan' : undefined}>{indicator} </Text>
         <Text>{agent.name.padEnd(22)}</Text>
-        <Text color="cyan">{agent.runtime.padEnd(10)}</Text>
-        <Text>{workerText.padEnd(12)}</Text>
-        <StatusDot status={status} showLabel />
+        <Text color="cyan">{agent.runtime.padEnd(12)}</Text>
+        <WorkerDots active={busyWorkers} total={maxWorkers} />
+        <Text>   </Text>
+        <StatusBadge status={status as BadgeStatus} />
       </Box>
 
       {/* Expanded details */}
@@ -100,8 +105,8 @@ const AgentRow: React.FC<AgentRowProps> = ({
             <Text color="cyan">{serverUrl}/v1/agents/{agent.name}</Text>
           </Box>
           <Box>
-            <Text dimColor>│ Workers    </Text>
-            <Text>{workers}/{maxWorkers}</Text>
+            <Text dimColor>│ MCP        </Text>
+            <Text color="cyan">{serverUrl}/v1/mcp/{agent.name}</Text>
           </Box>
           <Box>
             <Text dimColor>│ Queue      </Text>
@@ -166,7 +171,7 @@ export const AgentPs: React.FC = () => {
 
   return (
     <Box flexDirection="column" paddingY={1}>
-      <Text bold>Running Agents ({agents.length})</Text>
+      <Text bold>Agent Pools ({agents.length})</Text>
       <Box marginTop={1} />
 
       {/* Agent rows */}

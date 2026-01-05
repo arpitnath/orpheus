@@ -9,6 +9,8 @@ export type { StatusType } from './StatusDot.js';
 export { StatusBadge } from './StatusBadge.js';
 export type { BadgeStatus } from './StatusBadge.js';
 
+export { WorkerDots } from './WorkerDots.js';
+
 export { ProgressBar } from './ProgressBar.js';
 export { Row } from './Row.js';
 export { CheckItem } from './CheckItem.js';
