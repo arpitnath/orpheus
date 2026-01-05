@@ -15,3 +15,5 @@ export type { UseAgentDetailsResult } from './useAgentDetails.js';
 export { useRefresh, useQuit, useRefreshAndQuit, useIsInteractive } from './useRefresh.js';
 export { useKeyboardNavigation } from './useKeyboardNavigation.js';
 export type { UseKeyboardNavigationResult } from './useKeyboardNavigation.js';
+export { useTabNavigation } from './useTabNavigation.js';
+export type { UseTabNavigationResult } from './useTabNavigation.js';

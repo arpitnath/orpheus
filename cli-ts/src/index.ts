@@ -33,7 +33,8 @@ import { DeployProgress } from './components/DeployProgress.js';
 import { Status } from './components/Status.js';
 import { AgentList } from './components/AgentList.js';
 import { AgentPs } from './components/AgentPs.js';
-import { c, sym, ok, err as fmtErr, warn, label, table, box, statusDot } from './lib/format.js';
+import { AgentInspect } from './components/inspect/index.js';
+import { c, sym, ok, err as fmtErr, warn, label, table, box } from './lib/format.js';
 
 //@VERSION
 const VERSION = '0.1.0';
@@ -367,47 +368,22 @@ program
 program
   .command('inspect <agent>')
   .description('Show agent details')
-  .option('-f, --format <format>', 'Output format (json, yaml, text)', 'text')
+  .option('-f, --format <format>', 'Output format (json, text)', 'text')
   .action(async (agentName: string, options: { format?: string }) => {
-    try {
-      const client = createClient();
-      const details = await client.inspect(agentName);
-
-      if (options.format === 'json') {
+    if (options.format === 'json') {
+      // JSON output for scripting
+      try {
+        const client = createClient();
+        const details = await client.inspect(agentName);
         console.log(JSON.stringify(details, null, 2));
-        return;
+        client.close();
+      } catch (err) {
+        console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
+        process.exit(1);
       }
-
-      // Text format (default) - box layout
-      const lines: string[] = [];
-      lines.push(label('Runtime', details.runtime));
-      lines.push(label('Module', details.module));
-      lines.push(label('Entrypoint', details.entrypoint));
-      lines.push('');
-
-      if (details.endpoints?.http) {
-        lines.push(label('HTTP', details.endpoints.http));
-        if (details.endpoints.mcp) {
-          lines.push(label('MCP', details.endpoints.mcp));
-        }
-      } else {
-        lines.push(`${c.dim}Endpoints not available${c.reset}`);
-      }
-      lines.push('');
-
-      const scalingInfo = details.scaling
-        ? `${details.workers} (min: ${details.scaling.min_workers}, max: ${details.scaling.max_workers})`
-        : `${details.workers}`;
-      lines.push(label('Workers', scalingInfo));
-      lines.push(label('Status', `${statusDot(details.status)} ${details.status}`));
-      if (details.deployed_at) {
-        lines.push(label('Deployed', details.deployed_at));
-      }
-
-      console.log(box(details.name, lines.join('\n')));
-    } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
+    } else {
+      // TUI with tabs
+      renderApp(React.createElement(AgentInspect, { agentName }));
     }
   });
 
