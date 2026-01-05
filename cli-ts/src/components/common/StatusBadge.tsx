@@ -1,7 +1,7 @@
 import React from 'react';
 import { Text } from 'ink';
 
-export type BadgeStatus = 'deployed' | 'running' | 'idle' | 'stopped' | 'error' | 'pending';
+export type BadgeStatus = 'deployed' | 'running' | 'idle' | 'stopped' | 'error' | 'pending' | 'connected' | 'disconnected';
 
 interface StatusBadgeProps {
   status: BadgeStatus;
@@ -25,6 +25,10 @@ function getBadgeConfig(status: BadgeStatus): BadgeConfig {
       return { label: 'STOPPED', backgroundColor: 'yellow', color: 'black' };
     case 'error':
       return { label: 'ERROR', backgroundColor: 'red', color: 'white' };
+    case 'connected':
+      return { label: 'CONNECTED', backgroundColor: 'green', color: 'white' };
+    case 'disconnected':
+      return { label: 'DISCONNECTED', backgroundColor: 'red', color: 'white' };
     case 'pending':
     default:
       return { label: 'PENDING', backgroundColor: 'gray', color: 'white' };

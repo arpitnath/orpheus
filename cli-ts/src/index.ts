@@ -6,7 +6,6 @@ import { createClient, testConnection, getHealth, getStats } from './lib/api.js'
 import {
   getActiveServerName,
   getActiveServer,
-  socketExists,
   listServers,
   addServer,
   removeServer,
@@ -35,7 +34,8 @@ import { AgentList } from './components/AgentList.js';
 import { AgentPs } from './components/AgentPs.js';
 import { AgentInspect } from './components/inspect/index.js';
 import { PoolStats } from './components/PoolStats.js';
-import { c, sym, ok, err as fmtErr, warn, label } from './lib/format.js';
+import { HealthCheck } from './components/HealthCheck.js';
+import { c, sym, ok, err as fmtErr, label } from './lib/format.js';
 
 //@VERSION
 const VERSION = '0.1.0';
@@ -411,71 +411,8 @@ program
 program
   .command('healthcheck')
   .description('Run system health diagnostics')
-  .option('--fix', 'Attempt to fix issues')
-  .action(async (_options: { fix?: boolean }) => {
-    console.log(`${c.bold}Health Checks${c.reset}\n`);
-
-    let allPassed = true;
-    const { platform } = await import('node:os');
-    const { execSync } = await import('node:child_process');
-
-    // Check 1: Config exists
-    const configValid = socketExists() || getActiveServerName() !== 'local';
-    if (configValid) {
-      console.log(ok('Config valid'));
-    } else {
-      console.log(warn('Config: using defaults'));
-    }
-
-    // Check 2: Daemon reachable
-    const connected = await testConnection();
-    if (connected) {
-      console.log(ok('Daemon reachable'));
-    } else {
-      console.log(fmtErr('Daemon not reachable'));
-      allPassed = false;
-    }
-
-    // Check 3: Daemon health
-    if (connected) {
-      const health = await getHealth();
-      if (health && health.status === 'healthy') {
-        console.log(ok(`Daemon healthy (uptime: ${formatUptime(health.uptime_seconds)})`));
-      } else if (health) {
-        console.log(warn(`Daemon ${health.status}`));
-        allPassed = false;
-      } else {
-        console.log(fmtErr('Daemon health check failed'));
-        allPassed = false;
-      }
-    }
-
-    // Check 4: Lima VM (macOS only)
-    if (platform() === 'darwin') {
-      try {
-        const output = execSync('limactl list --json 2>/dev/null', { encoding: 'utf-8' });
-        const parsed = JSON.parse(output);
-        const vms = Array.isArray(parsed) ? parsed : [parsed];
-        const orpheusVm = vms.find((vm: { name: string }) => vm.name === 'orpheus');
-        if (orpheusVm && orpheusVm.status === 'Running') {
-          console.log(ok('Lima VM running'));
-        } else if (orpheusVm) {
-          console.log(warn(`Lima VM ${orpheusVm.status.toLowerCase()}`));
-        } else {
-          console.log(warn('Lima VM not found'));
-        }
-      } catch {
-        console.log(warn('Lima not installed or not configured'));
-      }
-    }
-
-    console.log('');
-    if (allPassed) {
-      console.log(`${c.green}All checks passed!${c.reset}`);
-    } else {
-      console.log(`${c.red}Some checks failed${c.reset}`);
-      process.exit(1);
-    }
+  .action(async () => {
+    renderApp(React.createElement(HealthCheck));
   });
 
 //@UTILITY_COMMANDS
