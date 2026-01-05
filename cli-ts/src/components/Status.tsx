@@ -1,52 +1,30 @@
 //@STATUS_COMPONENT
-import React, { useState, useEffect } from 'react';
+import React, { useCallback } from 'react';
 import { Box, Text, useApp } from 'ink';
-import { Spinner } from './common/Spinner.js';
-import { getHealth, getStats } from '../lib/api.js';
+import { useHealth, useStats, useRefreshAndQuit } from '../hooks/index.js';
+import { Spinner, StatusDot, RefreshHint } from './common/index.js';
 import { getActiveServerName, getActiveServer } from '../lib/config.js';
+import { formatUptime } from '../lib/format.js';
 import type { HealthResponse, StatsResponse } from '../types/index.js';
 
 //@HELPERS
-function formatUptime(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${secs}s`;
-  }
-  return `${secs}s`;
-}
-
-function getStatusIndicator(health: HealthResponse | null, stats: StatsResponse | null): {
-  icon: string;
-  color: string;
-  text: string;
-} {
+function getStatusType(
+  health: HealthResponse | null,
+  stats: StatsResponse | null
+): 'healthy' | 'degraded' | 'unhealthy' | 'error' {
   if (!health) {
-    return { icon: '✗', color: 'red', text: 'not running' };
+    return 'error';
   }
 
   // Check for degraded state: workers=0 but queue>0
   if (stats?.global) {
     const { total_workers, total_pending } = stats.global;
     if (total_workers === 0 && total_pending > 0) {
-      return { icon: '!', color: 'yellow', text: 'degraded' };
+      return 'degraded';
     }
   }
 
-  if (health.status === 'healthy') {
-    return { icon: '●', color: 'green', text: 'healthy' };
-  }
-
-  if (health.status === 'degraded') {
-    return { icon: '!', color: 'yellow', text: 'degraded' };
-  }
-
-  return { icon: '✗', color: 'red', text: 'unhealthy' };
+  return health.status;
 }
 
 function getHint(health: HealthResponse | null, stats: StatsResponse | null): string | null {
@@ -78,46 +56,26 @@ function getServerUrl(): string {
 //@COMPONENT
 export const Status: React.FC = () => {
   const { exit } = useApp();
-  const [loading, setLoading] = useState(true);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [stats, setStats] = useState<StatsResponse | null>(null);
 
+  // Use hooks for data fetching
+  const { health, loading: healthLoading, refetch: refetchHealth } = useHealth();
+  const { stats, refetch: refetchStats } = useStats();
+
+  // Combined refetch for refresh key
+  const refetch = useCallback(() => {
+    refetchHealth();
+    refetchStats();
+  }, [refetchHealth, refetchStats]);
+
+  // Handle keyboard input (r to refresh, q to quit)
+  useRefreshAndQuit(refetch, exit);
+
+  // Get server info
   const serverName = getActiveServerName();
   const serverUrl = getServerUrl();
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const healthData = await getHealth();
-        setHealth(healthData);
-
-        if (healthData) {
-          const statsData = await getStats();
-          setStats(statsData);
-        }
-      } catch {
-        // Error handled by null health
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, []);
-
-  // Auto-exit after data is loaded and rendered
-  useEffect(() => {
-    if (!loading) {
-      const timer = setTimeout(() => {
-        exit();
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-    return undefined;
-  }, [loading, exit]);
-
   // Loading state
-  if (loading) {
+  if (healthLoading) {
     return (
       <Box>
         <Spinner label="Checking status..." />
@@ -125,11 +83,10 @@ export const Status: React.FC = () => {
     );
   }
 
-  const status = getStatusIndicator(health, stats);
+  // Derive display values
+  const statusType = getStatusType(health, stats);
   const hint = getHint(health, stats);
   const uptime = health ? formatUptime(health.uptime_seconds) : '';
-
-  // Stats values with defaults
   const agents = stats?.global?.total_agents ?? 0;
   const workers = stats?.global?.total_workers ?? 0;
   const queue = stats?.global?.total_pending ?? 0;
@@ -138,7 +95,7 @@ export const Status: React.FC = () => {
     <Box flexDirection="column" paddingY={1}>
       {/* Row 1: Status indicator + Server name */}
       <Box justifyContent="space-between" width={60}>
-        <Text color={status.color}>{status.icon} {status.text}</Text>
+        <StatusDot status={statusType} showLabel />
         <Text>{serverName}</Text>
       </Box>
 
@@ -179,6 +136,9 @@ export const Status: React.FC = () => {
           <Text color="cyan">  → {hint}</Text>
         </Box>
       )}
+
+      {/* Refresh hint */}
+      <RefreshHint />
     </Box>
   );
 };

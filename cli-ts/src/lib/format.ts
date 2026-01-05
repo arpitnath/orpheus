@@ -102,3 +102,61 @@ export const statusDot = (status: string): string => {
       return `${c.dim}${sym.circle.empty}${c.reset}`;
   }
 };
+
+//@TIME_FORMATTING
+export function formatUptime(seconds: number): string {
+  if (seconds < 0 || !Number.isFinite(seconds)) return '0s';
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
+//@BYTE_FORMATTING
+export function formatBytes(bytes: number): string {
+  if (bytes < 0 || !Number.isFinite(bytes)) return '0 B';
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let unitIndex = 0;
+  let size = bytes;
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex++;
+  }
+
+  return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+//@RELATIVE_TIME
+export function formatRelativeTime(date: string | Date): string {
+  const now = new Date();
+  const then = typeof date === 'string' ? new Date(date) : date;
+  const diffMs = now.getTime() - then.getTime();
+
+  if (diffMs < 0) return 'in the future';
+
+  const seconds = Math.floor(diffMs / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days} day${days > 1 ? 's' : ''} ago`;
+  if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  if (minutes > 0) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  return 'just now';
+}
+
+//@STRING_UTILS
+export function truncate(str: string, maxLen: number): string {
+  if (!str || str.length <= maxLen) return str;
+  return str.slice(0, maxLen - 3) + '...';
+}
