@@ -3,6 +3,7 @@
 .claude.backup*/
 *.claude-*
 CLAUDE.md
+docs/exploration
 
 # Compiled binaries
 bin/
