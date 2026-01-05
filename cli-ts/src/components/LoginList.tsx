@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Text, useApp } from 'ink';
 import { listServers, getActiveServerName } from '../lib/config.js';
+import { getHealth } from '../lib/api.js';
 import type { ServerConfig } from '../types/index.js';
 import { StatusBadge, type BadgeStatus } from './common/index.js';
 
@@ -23,13 +24,10 @@ function truncate(str: string, maxLen: number): string {
   return str.slice(0, maxLen - 3) + '...';
 }
 
-async function checkServerStatus(_config: ServerConfig): Promise<'connected' | 'offline'> {
+async function checkServerStatus(): Promise<'connected' | 'offline'> {
   try {
-    // Dynamic import to avoid circular deps
-    const { createClient } = await import('../lib/api.js');
-    const client = createClient();
-    await client.health();
-    return 'connected';
+    const health = await getHealth();
+    return health ? 'connected' : 'offline';
   } catch {
     return 'offline';
   }
@@ -74,9 +72,12 @@ const ServerRow: React.FC<ServerRowProps> = ({ server, isActive }) => {
 
 export const LoginList: React.FC = () => {
   const { exit } = useApp();
-  const servers = listServers();
-  const activeServerName = getActiveServerName();
 
+  // Memoize servers to prevent re-creating on every render
+  const servers = useMemo(() => listServers(), []);
+  const activeServerName = useMemo(() => getActiveServerName(), []);
+
+  const [phase, setPhase] = useState<'checking' | 'done'>('checking');
   const [serverStatuses, setServerStatuses] = useState<ServerStatus[]>(
     Object.entries(servers).map(([name, config]) => ({
       name,
@@ -85,26 +86,42 @@ export const LoginList: React.FC = () => {
     }))
   );
 
+  // Effect 1: Perform health check on mount
   useEffect(() => {
+    let cancelled = false;
+
     async function checkActiveServer() {
-      // Only check status for active server
       const activeServer = servers[activeServerName];
-      if (!activeServer) return;
+      if (!activeServer) {
+        setPhase('done');
+        return;
+      }
 
-      const status = await checkServerStatus(activeServer);
+      const status = await checkServerStatus();
 
-      setServerStatuses((prev) =>
-        prev.map((s) =>
-          s.name === activeServerName ? { ...s, status } : s
-        )
-      );
-
-      // Exit after status check
-      setTimeout(() => exit(), 100);
+      if (!cancelled) {
+        setServerStatuses((prev) =>
+          prev.map((s) =>
+            s.name === activeServerName ? { ...s, status } : s
+          )
+        );
+        setPhase('done');
+      }
     }
 
     checkActiveServer();
-  }, [activeServerName, servers, exit]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeServerName, servers]);
+
+  // Effect 2: Exit after render completes with final state
+  useEffect(() => {
+    if (phase === 'done') {
+      exit();
+    }
+  }, [phase, exit]);
 
   const serverList = Object.keys(servers);
 
