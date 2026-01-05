@@ -34,7 +34,8 @@ import { Status } from './components/Status.js';
 import { AgentList } from './components/AgentList.js';
 import { AgentPs } from './components/AgentPs.js';
 import { AgentInspect } from './components/inspect/index.js';
-import { c, sym, ok, err as fmtErr, warn, label, table, box } from './lib/format.js';
+import { PoolStats } from './components/PoolStats.js';
+import { c, sym, ok, err as fmtErr, warn, label } from './lib/format.js';
 
 //@VERSION
 const VERSION = '0.1.0';
@@ -307,61 +308,20 @@ program
 program
   .command('stats')
   .description('Show pool statistics')
-  .argument('[agent]', 'Optional agent name filter')
-  .action(async (agent?: string) => {
-    try {
-      const stats = await getStats(agent);
-      if (!stats) {
-        console.error(`${c.red}Error:${c.reset} Cannot connect to daemon`);
+  .option('-f, --format <format>', 'Output format (json, text)', 'text')
+  .action(async (options: { format?: string }) => {
+    if (options.format === 'json') {
+      // JSON output for scripting
+      try {
+        const stats = await getStats();
+        console.log(JSON.stringify(stats, null, 2));
+      } catch (err) {
+        console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
         process.exit(1);
       }
-
-      // Defensive: check if global stats exist
-      if (!stats.global) {
-        console.error(`${c.red}Error:${c.reset} Invalid response from daemon (missing global stats)`);
-        process.exit(1);
-      }
-
-      // Global stats with safe defaults
-      const g = stats.global;
-      const globalLines = [
-        label('Agents', String(g.total_agents ?? 0)),
-        label('Workers', String(g.total_workers ?? 0)),
-        label('Pending', String(g.total_pending ?? 0)),
-        label('Processing', String(g.total_processing ?? 0)),
-        label('Utilization', `${(g.average_utilization ?? 0).toFixed(1)}%`),
-      ];
-      console.log(box('Pool Statistics', globalLines.join('\n')));
-
-      if (stats.agents && stats.agents.length > 0) {
-        // Separate agents with pools from those without
-        const agentsWithPools = stats.agents.filter(a => a.pool && a.queue && a.derived);
-        const agentsWithoutPools = stats.agents.filter(a => !a.pool || !a.queue || !a.derived);
-
-        if (agentsWithPools.length > 0) {
-          console.log(`\n${c.bold}Per-Agent Stats${c.reset}\n`);
-          const rows = agentsWithPools.map(a => [
-            a.agent_name.length > 22 ? a.agent_name.slice(0, 19) + '...' : a.agent_name,
-            String(a.pool!.total_workers),
-            String(a.queue!.pending),
-            String(a.queue!.processing),
-            `${a.derived!.utilization_percentage.toFixed(1)}%`,
-          ]);
-          console.log(table(['AGENT', 'WORKERS', 'PENDING', 'PROC', 'UTIL'], rows, [24, 10, 10, 8, 8]));
-        }
-
-        // Show agents without pools (legacy agents)
-        if (agentsWithoutPools.length > 0) {
-          console.log(`\n${c.dim}Agents without pools (legacy):${c.reset}`);
-          for (const a of agentsWithoutPools) {
-            const status = a.pool_status || 'not_available';
-            console.log(`  ${c.dim}•${c.reset} ${a.agent_name} ${c.dim}(${status})${c.reset}`);
-          }
-        }
-      }
-    } catch (err) {
-      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
+    } else {
+      // TUI view
+      renderApp(React.createElement(PoolStats));
     }
   });
 
