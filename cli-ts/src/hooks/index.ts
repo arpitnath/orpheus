@@ -13,3 +13,5 @@ export type { UseAgentDetailsResult } from './useAgentDetails.js';
 
 // Input hooks
 export { useRefresh, useQuit, useRefreshAndQuit, useIsInteractive } from './useRefresh.js';
+export { useKeyboardNavigation } from './useKeyboardNavigation.js';
+export type { UseKeyboardNavigationResult } from './useKeyboardNavigation.js';

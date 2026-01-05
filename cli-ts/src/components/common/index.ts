@@ -6,6 +6,9 @@ export { Badge } from './Badge.js';
 export { StatusDot } from './StatusDot.js';
 export type { StatusType } from './StatusDot.js';
 
+export { StatusBadge } from './StatusBadge.js';
+export type { BadgeStatus } from './StatusBadge.js';
+
 export { ProgressBar } from './ProgressBar.js';
 export { Row } from './Row.js';
 export { CheckItem } from './CheckItem.js';

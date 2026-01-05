@@ -31,7 +31,9 @@ import {
 import { renderApp } from './lib/render.js';
 import { DeployProgress } from './components/DeployProgress.js';
 import { Status } from './components/Status.js';
-import { c, sym, ok, err as fmtErr, warn, info, label, table, box, statusDot } from './lib/format.js';
+import { AgentList } from './components/AgentList.js';
+import { AgentPs } from './components/AgentPs.js';
+import { c, sym, ok, err as fmtErr, warn, label, table, box, statusDot } from './lib/format.js';
 
 //@VERSION
 const VERSION = '0.1.0';
@@ -298,29 +300,7 @@ program
       return;
     }
 
-    try {
-      const client = createClient();
-      const agents = await client.list();
-
-      if (agents.length === 0) {
-        console.log(info('No agents deployed'));
-        return;
-      }
-
-      console.log(`${c.bold}Deployed Agents${c.reset}\n`);
-      const rows = agents.map(agent => {
-        const status = agent.status || 'deployed';
-        return [
-          agent.name || 'unknown',
-          agent.runtime || `${c.dim}unknown${c.reset}`,
-          `${statusDot(status)} ${status}`,
-        ];
-      });
-      console.log(table(['NAME', 'RUNTIME', 'STATUS'], rows, [24, 14, 16]));
-    } catch (err) {
-      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
+    renderApp(React.createElement(AgentList));
   });
 
 program
@@ -433,31 +413,9 @@ program
 
 program
   .command('ps')
-  .description('Show running agents and workers')
-  .option('-a, --all', 'Show all agents including idle')
-  .action(async (_options: { all?: boolean }) => {
-    try {
-      const client = createClient();
-      const agents = await client.list();
-
-      if (agents.length === 0) {
-        console.log(info('No agents deployed'));
-        return;
-      }
-
-      const rows = agents.map(agent => {
-        const status = agent.status || 'deployed';
-        return [
-          agent.name || 'unknown',
-          agent.runtime || `${c.dim}unknown${c.reset}`,
-          `${statusDot(status)} ${status}`,
-        ];
-      });
-      console.log(table(['NAME', 'RUNTIME', 'STATUS'], rows, [24, 14, 16]));
-    } catch (err) {
-      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
+  .description('Show running agents (interactive)')
+  .action(async () => {
+    renderApp(React.createElement(AgentPs));
   });
 
 program
