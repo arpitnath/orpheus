@@ -6,7 +6,6 @@ import { createClient, testConnection, getHealth, getStats } from './lib/api.js'
 import {
   getActiveServerName,
   getActiveServer,
-  getDefaultSocketPath,
   socketExists,
   listServers,
   addServer,
@@ -31,6 +30,7 @@ import {
 } from './lib/vm.js';
 import { renderApp } from './lib/render.js';
 import { DeployProgress } from './components/DeployProgress.js';
+import { Status } from './components/Status.js';
 import { c, sym, ok, err as fmtErr, warn, info, label, table, box, statusDot } from './lib/format.js';
 
 //@VERSION
@@ -50,35 +50,7 @@ program
   .command('status')
   .description('Show system status and health')
   .action(async () => {
-    const lines: string[] = [];
-    const activeServer = getActiveServerName();
-    lines.push(label('Server', activeServer));
-
-    if (!socketExists()) {
-      lines.push(label('Daemon', `${c.red}not running${c.reset}`));
-      lines.push(label('Socket', getDefaultSocketPath()));
-      console.log(box('Orpheus Status', lines.join('\n')));
-      return;
-    }
-
-    const health = await getHealth();
-    if (health) {
-      lines.push(label('Daemon', `${statusDot(health.status)} ${health.status}`));
-      lines.push(label('Uptime', formatUptime(health.uptime_seconds)));
-
-      await new Promise(resolve => setTimeout(resolve, 50));
-      const stats = await getStats();
-      if (stats && stats.global) {
-        lines.push('');
-        lines.push(label('Agents', `${stats.global.total_agents} deployed`));
-        lines.push(label('Workers', `${stats.global.total_workers} total`));
-        lines.push(label('Pending', `${stats.global.total_pending} requests`));
-      }
-    } else {
-      lines.push(label('Daemon', `${c.red}not responding${c.reset}`));
-    }
-
-    console.log(box('Orpheus Status', lines.join('\n')));
+    renderApp(React.createElement(Status));
   });
 
 program
