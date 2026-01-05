@@ -4,9 +4,7 @@ import React from 'react';
 import { Command } from 'commander';
 import { createClient, testConnection, getHealth, getStats } from './lib/api.js';
 import {
-  getActiveServerName,
   getActiveServer,
-  listServers,
   addServer,
   removeServer,
   setActiveServer,
@@ -35,7 +33,9 @@ import { AgentPs } from './components/AgentPs.js';
 import { AgentInspect } from './components/inspect/index.js';
 import { PoolStats } from './components/PoolStats.js';
 import { HealthCheck } from './components/HealthCheck.js';
-import { c, sym, ok, err as fmtErr, label } from './lib/format.js';
+import { Validate } from './components/Validate.js';
+import { LoginList } from './components/LoginList.js';
+import { c, ok, label } from './lib/format.js';
 
 //@VERSION
 const VERSION = '0.1.0';
@@ -186,37 +186,7 @@ program
   .command('validate <path>')
   .description('Validate an agent.yaml file')
   .action(async (agentPath: string) => {
-    const { validateAgentYaml } = await import('./lib/validate.js');
-    const result = validateAgentYaml(agentPath);
-
-    if (result.valid) {
-      console.log(ok('Valid agent.yaml'));
-      if (result.config) {
-        console.log(`  ${label('Name', result.config.name, 14)}`);
-        console.log(`  ${label('Runtime', result.config.runtime, 14)}`);
-        console.log(`  ${label('Module', result.config.module, 14)}`);
-        console.log(`  ${label('Entrypoint', result.config.entrypoint, 14)}`);
-        if (result.config.scaling) {
-          console.log(`  ${label('Scaling', `${result.config.scaling.min_workers}-${result.config.scaling.max_workers} workers`, 14)}`);
-        }
-      }
-    } else {
-      console.log(fmtErr('Invalid agent.yaml'));
-      for (const error of result.errors) {
-        console.log(`  ${c.red}${sym.bullet}${c.reset} ${error}`);
-      }
-    }
-
-    if (result.warnings.length > 0) {
-      console.log('\nWarnings:');
-      for (const warning of result.warnings) {
-        console.log(`  ${c.yellow}${sym.bullet}${c.reset} ${warning}`);
-      }
-    }
-
-    if (!result.valid) {
-      process.exit(1);
-    }
+    renderApp(React.createElement(Validate, { path: agentPath }));
   });
 
 //@OBSERVABILITY_COMMANDS
@@ -512,16 +482,7 @@ loginCommand
   .command('list', { isDefault: true })
   .description('List configured servers')
   .action(async () => {
-    const servers = listServers();
-    const active = getActiveServerName();
-
-    console.log(`${c.bold}Configured Servers${c.reset}\n`);
-    for (const [name, config] of Object.entries(servers)) {
-      const marker = name === active ? `${c.green}${sym.arrow}${c.reset}` : ' ';
-      const mode = config.mode === 'unix_socket' ? `${c.dim}socket${c.reset}` : `${c.dim}tcp${c.reset}`;
-      const endpoint = config.mode === 'unix_socket' ? config.socket_path : config.url;
-      console.log(`${marker} ${name} (${mode}): ${endpoint}`);
-    }
+    renderApp(React.createElement(LoginList));
   });
 
 loginCommand
