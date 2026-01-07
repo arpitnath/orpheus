@@ -25,7 +25,7 @@ echo ""
 echo "Installing Python 3.12 in Lima VM..."
 limactl shell orpheus -- sudo apt-get update -qq
 limactl shell orpheus -- sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    python3.12 \
+    python3.13 \
     python3-pip \
     ca-certificates
 
@@ -52,7 +52,7 @@ limactl shell orpheus -- sudo bash -c '
 
     # Copy Python and essential binaries
     mkdir -p $BASE/usr/bin
-    cp -aL /usr/bin/python3.12 $BASE/usr/bin/
+    cp -aL /usr/bin/python3.13 $BASE/usr/bin/
     cp -aL /usr/bin/python3 $BASE/usr/bin/ 2>/dev/null || true
     cp -aL /usr/bin/pip3 $BASE/usr/bin/ 2>/dev/null || true
 
@@ -65,7 +65,7 @@ limactl shell orpheus -- sudo bash -c '
 
     # Copy usr/lib completely
     mkdir -p $BASE/usr/lib
-    cp -a /usr/lib/python3.12 $BASE/usr/lib/
+    cp -a /usr/lib/python3.13 $BASE/usr/lib/
     cp -a /usr/lib/python3 $BASE/usr/lib/ 2>/dev/null || true
     cp -a /usr/lib/aarch64-linux-gnu $BASE/usr/lib/ 2>/dev/null || true
 
@@ -82,9 +82,9 @@ limactl shell orpheus -- sudo bash -c '
 
     # Create symlinks for compatibility
     mkdir -p $BASE/usr/local/bin
-    ln -sf /usr/bin/python3.12 $BASE/usr/local/bin/python3.10
-    ln -sf /usr/bin/python3.12 $BASE/usr/local/bin/python3
-    ln -sf /usr/bin/python3.12 $BASE/usr/local/bin/python
+    ln -sf /usr/bin/python3.13 $BASE/usr/local/bin/python3.10
+    ln -sf /usr/bin/python3.13 $BASE/usr/local/bin/python3
+    ln -sf /usr/bin/python3.13 $BASE/usr/local/bin/python
     ln -sf /usr/bin/pip3 $BASE/usr/local/bin/pip
 
     # Create directories for agent
@@ -130,7 +130,7 @@ cat > "$TARGET_DIR/manifest.json" <<EOF
   "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "paths": {
     "python_binary": "/usr/local/bin/python3.10",
-    "python_lib": "/usr/lib/python3.12",
+    "python_lib": "/usr/lib/python3.13",
     "symlinks": [
       "/usr/local/bin/python3 -> python3.10",
       "/usr/local/bin/python -> python3.10"
@@ -161,7 +161,7 @@ echo "✓ Base image built successfully!"
 echo ""
 echo "Location: $TARGET_DIR"
 echo "Size: ${SIZE_MB}MB"
-echo "Python: $(limactl shell orpheus -- python3.12 --version)"
+echo "Python: $(limactl shell orpheus -- python3.13 --version)"
 echo "Libc: glibc (Ubuntu 24.04)"
 echo ""
 echo "Done! You can now deploy agents with:"
