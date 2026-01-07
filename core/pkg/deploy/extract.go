@@ -64,8 +64,13 @@ func ExtractTar(tarReader io.Reader, destDir string) error {
 				return fmt.Errorf("create parent dir for %s: %w", targetPath, err)
 			}
 
-			// Create file
-			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			// Create file with readable permissions
+			// Ensure at least 0644 (owner rw, others r) for agent files to be readable by runtime
+			mode := os.FileMode(header.Mode)
+			if mode&0644 != 0644 {
+				mode = mode | 0644
+			}
+			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 			if err != nil {
 				return fmt.Errorf("create file %s: %w", targetPath, err)
 			}
