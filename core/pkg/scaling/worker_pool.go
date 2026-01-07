@@ -31,6 +31,10 @@ type BasicWorkerPool struct {
 	lastReplacementTime time.Time
 	replacementMu       sync.RWMutex
 
+	// Session affinity tracking: sessionID → workerID
+	sessionWorkers   map[string]string
+	sessionWorkersMu sync.RWMutex
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -49,6 +53,7 @@ func NewWorkerPool(agentID string, spawner WorkerSpawner, policy ScalingPolicy) 
 		idleWorkers:         make(chan Worker, policy.MaxWorkers),
 		replacementAttempts: make(map[string]int),
 		lastReplacementTime: time.Now(),
+		sessionWorkers:      make(map[string]string),
 		ctx:                 ctx,
 		cancel:              cancel,
 	}
@@ -186,6 +191,130 @@ func (p *BasicWorkerPool) ReturnWorker(worker Worker) {
 		// Channel full - should not happen in normal operation
 		log.Printf("[pool] %s: idle channel full, dropping worker %s", p.agentID, worker.ID())
 	}
+}
+
+// AcquireForSession tries to get the worker that previously handled this session.
+// Falls back to any idle worker if preferred worker unavailable within maxWait.
+// If sessionID is empty, behaves like GetIdleWorker (backward compatible).
+func (p *BasicWorkerPool) AcquireForSession(ctx context.Context, sessionID string, maxWait time.Duration) (Worker, error) {
+	// No session = any worker
+	if sessionID == "" {
+		return p.GetIdleWorker(ctx)
+	}
+
+	// Check if session has a preferred worker
+	p.sessionWorkersMu.RLock()
+	preferredWorkerID, hasPreferred := p.sessionWorkers[sessionID]
+	p.sessionWorkersMu.RUnlock()
+
+	if !hasPreferred {
+		// First request for this session - get any worker
+		worker, err := p.GetIdleWorker(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Track session → worker mapping
+		p.sessionWorkersMu.Lock()
+		p.sessionWorkers[sessionID] = worker.ID()
+		p.sessionWorkersMu.Unlock()
+		log.Printf("[pool] %s: session %s assigned to worker %s", p.agentID, sessionID, worker.ID())
+		return worker, nil
+	}
+
+	// Try to get preferred worker from idle channel
+	worker := p.tryGetSpecificWorker(preferredWorkerID)
+	if worker != nil {
+		log.Printf("[pool] %s: session %s got preferred worker %s", p.agentID, sessionID, worker.ID())
+		return worker, nil
+	}
+
+	// Preferred worker busy - wait briefly
+	if maxWait > 0 {
+		worker = p.waitForSpecificWorker(ctx, preferredWorkerID, maxWait)
+		if worker != nil {
+			log.Printf("[pool] %s: session %s got preferred worker %s after wait", p.agentID, sessionID, worker.ID())
+			return worker, nil
+		}
+	}
+
+	// Fallback to any idle worker
+	log.Printf("[pool] %s: session %s fallback to any worker (preferred %s busy)", p.agentID, sessionID, preferredWorkerID)
+	worker, err := p.GetIdleWorker(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Update session mapping to new worker
+	p.sessionWorkersMu.Lock()
+	p.sessionWorkers[sessionID] = worker.ID()
+	p.sessionWorkersMu.Unlock()
+	return worker, nil
+}
+
+// tryGetSpecificWorker attempts to extract a specific worker from the idle channel.
+// Returns nil if worker not in channel (busy or doesn't exist).
+func (p *BasicWorkerPool) tryGetSpecificWorker(workerID string) Worker {
+	// Drain and re-queue workers until we find the one we want or exhaust options
+	var found Worker
+	checked := make([]Worker, 0)
+
+	for {
+		select {
+		case w := <-p.idleWorkers:
+			if w.ID() == workerID {
+				found = w
+				goto done
+			}
+			checked = append(checked, w)
+		default:
+			// Channel empty
+			goto done
+		}
+	}
+done:
+	// Return non-matching workers to channel
+	for _, w := range checked {
+		select {
+		case p.idleWorkers <- w:
+		default:
+			// Channel full - shouldn't happen
+		}
+	}
+	return found
+}
+
+// waitForSpecificWorker waits up to maxWait for a specific worker to become idle.
+func (p *BasicWorkerPool) waitForSpecificWorker(ctx context.Context, workerID string, maxWait time.Duration) Worker {
+	deadline := time.Now().Add(maxWait)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for time.Now().Before(deadline) {
+		if worker := p.tryGetSpecificWorker(workerID); worker != nil {
+			return worker
+		}
+		select {
+		case <-ticker.C:
+			continue
+		case <-ctx.Done():
+			return nil
+		}
+	}
+	return nil
+}
+
+// ClearSession removes session tracking for a session ID.
+func (p *BasicWorkerPool) ClearSession(sessionID string) {
+	p.sessionWorkersMu.Lock()
+	delete(p.sessionWorkers, sessionID)
+	p.sessionWorkersMu.Unlock()
+}
+
+// GetSessionWorker returns the worker ID associated with a session, if any.
+func (p *BasicWorkerPool) GetSessionWorker(sessionID string) (string, bool) {
+	p.sessionWorkersMu.RLock()
+	defer p.sessionWorkersMu.RUnlock()
+	workerID, ok := p.sessionWorkers[sessionID]
+	return workerID, ok
 }
 
 // GetStats returns a snapshot of the pool's current statistics.

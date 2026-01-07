@@ -132,12 +132,16 @@ func (s *Server) executeViaPool(w http.ResponseWriter, r *http.Request, agentNam
 		return
 	}
 
+	// Extract session ID from header for session affinity (Phase 2)
+	sessionID := r.Header.Get(pool.sessionConfig.Key)
+
 	// Create scaling request
 	scalingReq := &scaling.Request{
 		ID:         uuid.New().String(),
 		Input:      req.Input,
 		Context:    r.Context(),
 		ResponseCh: make(chan *scaling.Response, 1),
+		SessionID:  sessionID,
 	}
 
 	// Enqueue to agent's queue
@@ -246,6 +250,9 @@ func (s *Server) executeViaPoolStreaming(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	// Extract session ID from header for session affinity (Phase 2)
+	sessionID := r.Header.Get(pool.sessionConfig.Key)
+
 	// Create SSE writer
 	sseWriter := runtime.NewSSEWriter(w)
 	if sseWriter == nil {
@@ -276,7 +283,8 @@ func (s *Server) executeViaPoolStreaming(w http.ResponseWriter, r *http.Request,
 		Input:      req.Input,
 		Context:    r.Context(),
 		ResponseCh: make(chan *scaling.Response, 1),
-		StreamCh:   streamCh, // Enable streaming
+		StreamCh:   streamCh,    // Enable streaming
+		SessionID:  sessionID,   // Session affinity (Phase 2)
 	}
 
 	// Enqueue request
