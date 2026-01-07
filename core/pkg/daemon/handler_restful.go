@@ -540,6 +540,22 @@ func (s *Server) handleDeleteAgentByName(w http.ResponseWriter, agentName string
 		}
 	}
 
+	// Delete workspace directory
+	workspaceBaseDir := "/var/lib/orpheus/workspaces"
+	if _, statErr := os.Stat("/var/lib/orpheus"); os.IsNotExist(statErr) {
+		home, _ := os.UserHomeDir()
+		workspaceBaseDir = filepath.Join(home, ".orpheus", "workspaces")
+	}
+	workspaceDir := filepath.Join(workspaceBaseDir, agentName)
+	if workspaceDir != "" && workspaceDir != "/" && workspaceDir != "." {
+		if removeErr := os.RemoveAll(workspaceDir); removeErr != nil {
+			log.Printf("[handler] Warning: Failed to remove workspace '%s': %v", workspaceDir, removeErr)
+			// Continue - agent already cleaned up
+		} else {
+			log.Printf("[handler] Removed workspace directory: %s", workspaceDir)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "agent undeployed",
 		"name":    agentName,

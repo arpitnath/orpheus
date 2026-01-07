@@ -268,6 +268,20 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	emit("deploy_progress", "copying", "Base image and agent code ready", 50)
 
+	// Create workspace directory for persistent storage
+	workspaceDir, err := createWorkspaceDir(agentName)
+	if err != nil {
+		os.RemoveAll(agentDir)
+		if useSSE {
+			emitError("workspace", fmt.Sprintf("create workspace: %v", err))
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("create workspace: %v", err))
+		}
+		return
+	}
+	log.Printf("Created workspace directory: %s", workspaceDir)
+	emit("deploy_progress", "workspace", "Workspace directory created", 55)
+
 	// Install dependencies based on runtime
 	log.Printf("Installing dependencies for '%s' (runtime: %s)...", agentName, agentConfig.Runtime)
 	depInfo, err := installDependencies(agentConfig.Runtime, agentCodeDir, agentDir)
@@ -534,4 +548,33 @@ func installNodeDeps(agentCodeDir string) (bool, error) {
 		return false, fmt.Errorf("npm install failed: %v: %s", err, string(output))
 	}
 	return true, nil
+}
+
+// createWorkspaceDir creates the persistent workspace directory for an agent.
+// Returns the workspace path or error.
+// The workspace is used for persistent storage that survives container restarts.
+func createWorkspaceDir(agentName string) (string, error) {
+	// Determine workspace base directory (mirrors agent base dir logic)
+	workspaceBaseDir := "/var/lib/orpheus/workspaces"
+	if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
+		home, _ := os.UserHomeDir()
+		workspaceBaseDir = filepath.Join(home, ".orpheus", "workspaces")
+	}
+
+	workspaceDir := filepath.Join(workspaceBaseDir, agentName)
+
+	// Create workspace directory
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		return "", fmt.Errorf("create workspace dir: %w", err)
+	}
+
+	// Change ownership to container UID (1000:1000)
+	// This ensures the non-root container process can write to it
+	if err := os.Chown(workspaceDir, 1000, 1000); err != nil {
+		// Log warning but don't fail - might work anyway if daemon runs as root
+		// or if the directory is already writable by UID 1000
+		log.Printf("Warning: Failed to chown workspace to 1000:1000: %v", err)
+	}
+
+	return workspaceDir, nil
 }

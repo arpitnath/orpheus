@@ -168,6 +168,10 @@ type SpecOptions struct {
 
 	// CustomArgs overrides the default process args
 	CustomArgs []string
+
+	// AdditionalMounts specifies extra mounts to add to the container
+	// Used for workspace persistence and other bind mounts
+	AdditionalMounts []Mount
 }
 
 // GenerateSpecWithOptions creates a spec with custom options
@@ -203,6 +207,11 @@ func GenerateSpecWithOptions(cfg *config.AgentConfig, opts *SpecOptions) *Spec {
 
 	if len(opts.CustomArgs) > 0 {
 		spec.Process.Args = opts.CustomArgs
+	}
+
+	// Append additional mounts (e.g., workspace bind mount)
+	if len(opts.AdditionalMounts) > 0 {
+		spec.Mounts = append(spec.Mounts, opts.AdditionalMounts...)
 	}
 
 	return spec
