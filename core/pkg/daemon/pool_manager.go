@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"orpheus/daemon/pkg/config"
+	"orpheus/daemon/pkg/execlog"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/scaling"
 
@@ -40,6 +41,7 @@ type AgentPool struct {
 type PoolManager struct {
 	registry   registry.Registry
 	autoscaler *scaling.BasicAutoscaler
+	execlogDir string // ExecLog directory for logging
 
 	pools map[string]*AgentPool // agentName → pool
 	mu    sync.RWMutex
@@ -50,9 +52,10 @@ type PoolManager struct {
 }
 
 // NewPoolManager creates a new pool manager.
-func NewPoolManager(registry registry.Registry, autoscaler *scaling.BasicAutoscaler, ctx context.Context) *PoolManager {
+func NewPoolManager(registry registry.Registry, autoscaler *scaling.BasicAutoscaler, execlogDir string, ctx context.Context) *PoolManager {
 	ctx, cancel := context.WithCancel(ctx)
 	return &PoolManager{
+		execlogDir: execlogDir,
 		registry:   registry,
 		autoscaler: autoscaler,
 		pools:      make(map[string]*AgentPool),
@@ -214,6 +217,14 @@ func (pm *PoolManager) workerLoop(agentPool *AgentPool) {
 			continue
 		}
 
+		// Log STARTED state (best-effort, async)
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID: req.ID,
+			State:     execlog.StateStarted,
+			WorkerID:  ptrString(worker.ID()),
+			SessionID: ptrOrNil(req.SessionID),
+		})
+
 		// Check if streaming requested (Phase 3)
 		if req.StreamCh != nil {
 			// Streaming execution
@@ -268,6 +279,24 @@ func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.
 
 	// Return worker to pool
 	agentPool.pool.ReturnWorker(worker)
+
+	// Log COMPLETED or FAILED state (best-effort, async)
+	if err != nil {
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateFailed,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+			Error:      ptrString(err.Error()),
+		})
+	} else {
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateCompleted,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+		})
+	}
 
 	// Send response
 	req.ResponseCh <- &scaling.Response{
@@ -833,4 +862,28 @@ func (w *DaemonWorker) Shutdown(ctx context.Context) error {
 
 	// Daemon workers are stateless - no cleanup needed
 	return nil
+}
+
+// logExecLogEvent logs an execution event (best-effort, never fails)
+func (pm *PoolManager) logExecLogEvent(agentName string, event *execlog.Event) {
+	writer, err := execlog.NewWriter(pm.execlogDir, agentName)
+	if err != nil {
+		log.Printf("Warning: ExecLog writer error: %v", err)
+		return
+	}
+	defer writer.Close()
+
+	event.Timestamp = time.Now()
+	if err := writer.Log(event); err != nil {
+		log.Printf("Warning: ExecLog write error: %v", err)
+	}
+}
+
+// Helper functions for pointer creation
+func ptrString(s string) *string {
+	return &s
+}
+
+func ptrInt64(i int64) *int64 {
+	return &i
 }

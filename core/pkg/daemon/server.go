@@ -36,6 +36,9 @@ type Server struct {
 	// Agent registry (for discovery and env vars)
 	registry registry.Registry
 
+	// ExecLog directory (for execution logging)
+	execlogDir string
+
 	// Autoscaling (NEW - integrates pkg/scaling)
 	poolManager *PoolManager
 	autoscaler  *scaling.BasicAutoscaler
@@ -58,15 +61,16 @@ type RunningAgent struct {
 }
 
 // NewServer creates a new daemon server with the given configuration.
-func NewServer(config *DaemonConfig, version string) (*Server, error) {
+func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server, error) {
 	// Create server context for lifecycle management
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Server{
-		config:    config,
-		version:   version,
-		startTime: time.Now(),
-		running:   make(map[string]*RunningAgent),
+		config:     config,
+		version:    version,
+		execlogDir: execlogDir,
+		startTime:  time.Now(),
+		running:    make(map[string]*RunningAgent),
 		listeners: make([]net.Listener, 0),
 		ctx:       ctx,
 		cancel:    cancel,
@@ -119,7 +123,7 @@ func NewServer(config *DaemonConfig, version string) (*Server, error) {
 	log.Printf("Autoscaler initialized (interval: 5s)")
 
 	// Initialize pool manager
-	poolManager := NewPoolManager(reg, autoscaler, ctx)
+	poolManager := NewPoolManager(reg, autoscaler, execlogDir, ctx)
 	s.poolManager = poolManager
 	log.Printf("Pool manager initialized")
 

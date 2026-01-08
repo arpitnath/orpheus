@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"orpheus/daemon/pkg/execlog"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/runtime"
 	"orpheus/daemon/pkg/scaling"
@@ -152,6 +153,26 @@ func (s *Server) executeViaPool(w http.ResponseWriter, r *http.Request, agentNam
 		ResponseCh: make(chan *scaling.Response, 1),
 		SessionID:  sessionID,
 	}
+
+	// Log QUEUED state (best-effort, async)
+	go func() {
+		writer, err := execlog.NewWriter(s.execlogDir, agentName)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		defer writer.Close()
+
+		err = writer.Log(&execlog.Event{
+			Timestamp: time.Now(),
+			RequestID: scalingReq.ID,
+			State:     execlog.StateQueued,
+			SessionID: ptrOrNil(scalingReq.SessionID),
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to log QUEUED: %v", err)
+		}
+	}()
 
 	// Enqueue to agent's queue
 	if err := pool.queue.Enqueue(r.Context(), scalingReq); err != nil {
@@ -1013,4 +1034,12 @@ func (s *Server) handleWorkspaceClean(w http.ResponseWriter, r *http.Request, ag
 		AgentName:  agentName,
 		FreedBytes: sizeBytes,
 	})
+}
+
+// ptrOrNil returns a pointer to the string, or nil if empty
+func ptrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

@@ -17,6 +17,7 @@ import (
 
 	"orpheus/daemon/pkg/auth"
 	"orpheus/daemon/pkg/daemon"
+	"orpheus/daemon/pkg/execlog"
 )
 
 const version = "0.1.0"
@@ -81,8 +82,35 @@ func runServer() {
 		config.UnixSocket.Path = defaultSocket()
 	}
 
+	// Initialize ExecLog directory
+	execlogDir := "/var/lib/orpheus/execlog"
+	if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
+		home, _ := os.UserHomeDir()
+		execlogDir = filepath.Join(home, ".orpheus", "execlog")
+	}
+	if err := os.MkdirAll(execlogDir, 0755); err != nil {
+		log.Fatalf("Failed to create execlog directory: %v", err)
+	}
+
+	// Run crash recovery
+	log.Printf("Running crash recovery...")
+	crashed, err := execlog.DetectAndMarkCrashed(execlogDir)
+	if err != nil {
+		log.Printf("Warning: Crash recovery failed: %v", err)
+	} else {
+		totalCrashed := 0
+		for agentName, requests := range crashed {
+			totalCrashed += len(requests)
+			log.Printf("  %s: %d crashed requests", agentName, len(requests))
+		}
+		if totalCrashed > 0 {
+			log.Printf("Marked %d total requests as CRASHED", totalCrashed)
+			log.Printf("Query with: orpheus execlog crashed")
+		}
+	}
+
 	// Create server
-	server, err := daemon.NewServer(config, version)
+	server, err := daemon.NewServer(config, version, execlogDir)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
