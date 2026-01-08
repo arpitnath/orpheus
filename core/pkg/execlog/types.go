@@ -52,3 +52,25 @@ type ExecLogEntry struct {
 	DurationMs *int64
 	Error      *string
 }
+
+// ExecLogStats holds aggregated statistics for an agent's execution logs
+type ExecLogStats struct {
+	// Counts by state
+	Queued    int
+	Started   int
+	Completed int
+	Failed    int
+	Crashed   int
+	Total     int
+
+	// Duration metrics (milliseconds)
+	AvgDuration float64
+	MinDuration int64
+	MaxDuration int64
+
+	// Derived metrics
+	SuccessRate  float64 // completed/total * 100
+	ErrorRate    float64 // (failed+crashed)/total * 100
+	CrashRate    float64 // crashed/total * 100
+	HealthStatus string  // "healthy"/"degraded"/"unhealthy"
+}

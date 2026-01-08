@@ -19,6 +19,7 @@ import type {
   CrashedRequestsResponse,
   ExecLogFilters,
   ExecLogsResponse,
+  ExecLogStatsResponse,
 } from '../types/index.js';
 
 //@HTTP_CLIENT
@@ -236,6 +237,13 @@ export function createClient(_serverName?: string): OrpheusClient {
       const path = `/v1/execlog${query ? '?' + query : ''}`;
 
       return makeRequest<ExecLogsResponse>('GET', path, serverConfig);
+    },
+
+    async getExecLogStats(agentName?: string): Promise<ExecLogStatsResponse> {
+      const path = agentName
+        ? `/v1/execlog/stats?agent=${encodeURIComponent(agentName)}`
+        : '/v1/execlog/stats';
+      return makeRequest<ExecLogStatsResponse>('GET', path, serverConfig);
     },
 
     close(): void {

@@ -1229,3 +1229,101 @@ func (s *Server) handleExecLog(w http.ResponseWriter, r *http.Request) {
 		"total_pages": totalPages,
 	})
 }
+
+// handleExecLogStats returns aggregated execution statistics
+// GET /v1/execlog/stats?agent=<name>
+func (s *Server) handleExecLogStats(w http.ResponseWriter, r *http.Request) {
+	// Only support GET
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	agentFilter := r.URL.Query().Get("agent")
+
+	// Get all deployed agents
+	agents, err := s.registry.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list agents: %v", err))
+		return
+	}
+
+	// Filter agents if specified
+	var targetAgents []registry.RegisteredAgent
+	if agentFilter != "" {
+		for _, agent := range agents {
+			if agent.Name == agentFilter {
+				targetAgents = append(targetAgents, agent)
+				break
+			}
+		}
+	} else {
+		targetAgents = agents
+	}
+
+	// Collect stats from each agent
+	var agentStats []map[string]interface{}
+	globalTotal := 0
+	globalCompleted := 0
+	globalFailed := 0
+	globalCrashed := 0
+	globalAvgDuration := 0.0
+	agentCount := 0
+
+	for _, agent := range targetAgents {
+		reader, err := execlog.NewReader(s.execlogDir, agent.Name)
+		if err != nil {
+			continue // Skip agents without execlog
+		}
+
+		stats, err := reader.GetStats()
+		reader.Close()
+
+		if err != nil {
+			log.Printf("Warning: Failed to get stats for %s: %v", agent.Name, err)
+			continue
+		}
+
+		// Aggregate global
+		globalTotal += stats.Total
+		globalCompleted += stats.Completed
+		globalFailed += stats.Failed
+		globalCrashed += stats.Crashed
+		globalAvgDuration += stats.AvgDuration
+		agentCount++
+
+		// Add to response
+		agentStats = append(agentStats, map[string]interface{}{
+			"agent_name":      agent.Name,
+			"total":           stats.Total,
+			"completed":       stats.Completed,
+			"failed":          stats.Failed,
+			"crashed":         stats.Crashed,
+			"success_rate":    stats.SuccessRate,
+			"avg_duration_ms": stats.AvgDuration,
+			"health_status":   stats.HealthStatus,
+		})
+	}
+
+	// Calculate global metrics
+	globalSuccessRate := 0.0
+	if globalTotal > 0 {
+		globalSuccessRate = float64(globalCompleted) / float64(globalTotal) * 100.0
+	}
+	if agentCount > 0 {
+		globalAvgDuration = globalAvgDuration / float64(agentCount)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"agents": agentStats,
+		"global": map[string]interface{}{
+			"total_requests":  globalTotal,
+			"completed":       globalCompleted,
+			"failed":          globalFailed,
+			"crashed":         globalCrashed,
+			"success_rate":    globalSuccessRate,
+			"avg_duration_ms": globalAvgDuration,
+		},
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
+}

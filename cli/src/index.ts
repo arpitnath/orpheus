@@ -1068,6 +1068,81 @@ execlogCommand
     }
   });
 
+execlogCommand
+  .command('stats')
+  .description('Show execution statistics')
+  .argument('[agent]', 'Agent name (optional, shows all if omitted)')
+  .option('-f, --format <format>', 'Output format (table, json)', 'table')
+  .action(async (agentName: string | undefined, options: { format?: string }) => {
+    try {
+      const client = createClient();
+      const response = await client.getExecLogStats(agentName);
+
+      if (options.format === 'json') {
+        console.log(JSON.stringify(response, null, 2));
+        return;
+      }
+
+      // Table format
+      if (response.agents.length === 0) {
+        console.log(`\n${c.dim}No execution logs found.${c.reset}\n`);
+        return;
+      }
+
+      console.log(`\n${c.bold}ExecLog Statistics${c.reset}\n`);
+
+      // Table header
+      const cols = ['AGENT', 'TOTAL', 'COMPLETED', 'FAILED', 'CRASHED', 'SUCCESS%', 'AVG(ms)', 'HEALTH'];
+      const widths = [15, 9, 11, 8, 9, 10, 9, 10];
+      let header = '';
+      for (let i = 0; i < cols.length; i++) {
+        header += cols[i].padEnd(widths[i]);
+      }
+      console.log(c.dim + header + c.reset);
+      console.log(c.dim + '─'.repeat(80) + c.reset);
+
+      // Per-agent rows
+      for (const stats of response.agents) {
+        const health =
+          stats.health_status === 'healthy'
+            ? c.green + stats.health_status + c.reset
+            : stats.health_status === 'degraded'
+            ? c.yellow + stats.health_status + c.reset
+            : c.red + stats.health_status + c.reset;
+
+        console.log(
+          stats.agent_name.padEnd(widths[0]) +
+          String(stats.total).padEnd(widths[1]) +
+          String(stats.completed).padEnd(widths[2]) +
+          String(stats.failed).padEnd(widths[3]) +
+          String(stats.crashed).padEnd(widths[4]) +
+          (stats.success_rate.toFixed(1) + '%').padEnd(widths[5]) +
+          Math.round(stats.avg_duration_ms).toString().padEnd(widths[6]) +
+          health
+        );
+      }
+
+      // Global summary (if multiple agents)
+      if (response.agents.length > 1) {
+        console.log(c.dim + '─'.repeat(80) + c.reset);
+        console.log(
+          'Total'.padEnd(widths[0]) +
+          String(response.global.total_requests).padEnd(widths[1]) +
+          String(response.global.completed).padEnd(widths[2]) +
+          String(response.global.failed).padEnd(widths[3]) +
+          String(response.global.crashed).padEnd(widths[4]) +
+          (response.global.success_rate.toFixed(1) + '%').padEnd(widths[5]) +
+          Math.round(response.global.avg_duration_ms).toString().padEnd(widths[6])
+        );
+      }
+
+      console.log('');
+    } catch (err) {
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
 //@HELPERS
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';

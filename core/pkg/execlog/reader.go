@@ -170,6 +170,86 @@ func (r *Reader) GetExecutionLogsCount(filters *ExecLogFilters) (int, error) {
 	return count, err
 }
 
+// GetStats returns aggregated execution statistics for this agent
+func (r *Reader) GetStats() (*ExecLogStats, error) {
+	stats := &ExecLogStats{}
+
+	// Count by state
+	rows, err := r.db.Query(`
+		SELECT state, COUNT(*) as count
+		FROM events
+		GROUP BY state
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query state counts: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var state string
+		var count int
+		if err := rows.Scan(&state, &count); err != nil {
+			continue
+		}
+
+		switch state {
+		case StateQueued:
+			stats.Queued = count
+		case StateStarted:
+			stats.Started = count
+		case StateCompleted:
+			stats.Completed = count
+		case StateFailed:
+			stats.Failed = count
+		case StateCrashed:
+			stats.Crashed = count
+		}
+		stats.Total += count
+	}
+
+	// Duration stats (for COMPLETED requests only)
+	var avgDuration, minDuration, maxDuration sql.NullFloat64
+	err = r.db.QueryRow(`
+		SELECT AVG(duration_ms), MIN(duration_ms), MAX(duration_ms)
+		FROM events
+		WHERE state = ? AND duration_ms IS NOT NULL
+	`, StateCompleted).Scan(&avgDuration, &minDuration, &maxDuration)
+
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("query duration stats: %w", err)
+	}
+
+	if avgDuration.Valid {
+		stats.AvgDuration = avgDuration.Float64
+	}
+	if minDuration.Valid {
+		stats.MinDuration = int64(minDuration.Float64)
+	}
+	if maxDuration.Valid {
+		stats.MaxDuration = int64(maxDuration.Float64)
+	}
+
+	// Calculate derived metrics
+	if stats.Total > 0 {
+		stats.SuccessRate = float64(stats.Completed) / float64(stats.Total) * 100.0
+		stats.ErrorRate = float64(stats.Failed+stats.Crashed) / float64(stats.Total) * 100.0
+		stats.CrashRate = float64(stats.Crashed) / float64(stats.Total) * 100.0
+
+		// Determine health status
+		if stats.ErrorRate < 1.0 && stats.CrashRate == 0 {
+			stats.HealthStatus = "healthy"
+		} else if stats.ErrorRate < 5.0 && stats.CrashRate < 0.5 {
+			stats.HealthStatus = "degraded"
+		} else {
+			stats.HealthStatus = "unhealthy"
+		}
+	} else {
+		stats.HealthStatus = "no_data"
+	}
+
+	return stats, nil
+}
+
 // Close closes the database connection
 func (r *Reader) Close() error {
 	return r.db.Close()
