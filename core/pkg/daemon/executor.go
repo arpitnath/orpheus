@@ -45,9 +45,10 @@ func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
 
 	// Build execute options
 	opts := &proxy.ExecuteOptions{
-		Input:      marshalInput(req.Input),
-		UseIsolate: true,
-		RootFSPath: imagePath,
+		Input:         marshalInput(req.Input),
+		UseIsolate:    true,
+		RootFSPath:    imagePath,
+		WorkspacePath: resolveWorkspacePath(req.AgentPath),
 	}
 
 	// Apply memory limits
@@ -102,10 +103,11 @@ func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime
 
 	// Build execute options with streaming
 	opts := &proxy.ExecuteOptions{
-		Input:        marshalInput(req.Input),
-		UseIsolate:   true,
-		RootFSPath:   imagePath,
-		StreamWriter: streamWriter, // Enable streaming
+		Input:         marshalInput(req.Input),
+		UseIsolate:    true,
+		RootFSPath:    imagePath,
+		WorkspacePath: resolveWorkspacePath(req.AgentPath),
+		StreamWriter:  streamWriter, // Enable streaming
 	}
 
 	// Apply memory limits
@@ -129,6 +131,50 @@ func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime
 	// Execute agent with streaming enabled
 	result := proxy.RunAgent(ctx, cfg, entrypointPath, opts)
 	return result, nil
+}
+
+// resolveWorkspacePath returns the workspace directory path for an agent.
+// Workspace is stored at ~/.orpheus/workspaces/{agentName}/ or /var/lib/orpheus/workspaces/{agentName}/
+func resolveWorkspacePath(agentPath string) string {
+	// Get agent name from path
+	agentName := filepath.Base(agentPath)
+	if agentName == "agent" {
+		agentName = filepath.Base(filepath.Dir(agentPath))
+	}
+
+	// Determine workspace base directory (mirrors agent base dir logic)
+	workspaceBaseDir := "/var/lib/orpheus/workspaces"
+	if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
+		home, _ := os.UserHomeDir()
+		workspaceBaseDir = filepath.Join(home, ".orpheus", "workspaces")
+	}
+
+	// Try multiple possible home directories for Lima VM scenarios
+	homeDirs := []string{}
+	if home, err := os.UserHomeDir(); err == nil {
+		homeDirs = append(homeDirs, home)
+	}
+
+	// Extract home from agent path for Lima VM mounted macOS home
+	if len(agentPath) > 7 && agentPath[:7] == "/Users/" {
+		for i := 7; i < len(agentPath); i++ {
+			if agentPath[i] == '/' {
+				homeDirs = append(homeDirs, agentPath[:i])
+				break
+			}
+		}
+	}
+
+	// Find existing workspace
+	for _, home := range homeDirs {
+		workspacePath := filepath.Join(home, ".orpheus", "workspaces", agentName)
+		if _, err := os.Stat(workspacePath); err == nil {
+			return workspacePath
+		}
+	}
+
+	// Return default path (will be created by deploy_handler)
+	return filepath.Join(workspaceBaseDir, agentName)
 }
 
 // resolveImagePath determines the rootfs path for the agent.

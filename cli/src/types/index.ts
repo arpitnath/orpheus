@@ -165,6 +165,8 @@ export interface OrpheusClient {
   undeploy(agentName: string): Promise<{ success: boolean; message?: string }>;
   list(): Promise<AgentListItem[]>;
   inspect(agentName: string): Promise<AgentDetails>;
+  workspaceInfo(agentName: string): Promise<WorkspaceInfoResponse>;
+  workspaceClean(agentName: string): Promise<WorkspaceCleanResponse>;
   close(): void;
 }
 
@@ -202,4 +204,20 @@ export interface LogEntry {
   level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
   message: string;
   agent?: string;
+}
+
+//@WORKSPACE_TYPES
+export interface WorkspaceInfoResponse {
+  agent_name: string;
+  path: string;
+  size_bytes: number;
+  file_count: number;
+  files?: Record<string, number>;
+  exists: boolean;
+}
+
+export interface WorkspaceCleanResponse {
+  status: string;
+  agent_name: string;
+  freed_bytes: number;
 }

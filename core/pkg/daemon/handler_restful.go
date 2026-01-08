@@ -51,6 +51,15 @@ func (s *Server) handleAgentResource(w http.ResponseWriter, r *http.Request) {
 				s.handleAgentStats(w, r, agentName)
 				return
 			}
+		case "workspace":
+			if r.Method == http.MethodGet {
+				s.handleWorkspaceInfo(w, r, agentName)
+				return
+			}
+			if r.Method == http.MethodDelete {
+				s.handleWorkspaceClean(w, r, agentName)
+				return
+			}
 		}
 	}
 
@@ -132,12 +141,16 @@ func (s *Server) executeViaPool(w http.ResponseWriter, r *http.Request, agentNam
 		return
 	}
 
+	// Extract session ID from header for session affinity (Phase 2)
+	sessionID := r.Header.Get(pool.sessionConfig.Key)
+
 	// Create scaling request
 	scalingReq := &scaling.Request{
 		ID:         uuid.New().String(),
 		Input:      req.Input,
 		Context:    r.Context(),
 		ResponseCh: make(chan *scaling.Response, 1),
+		SessionID:  sessionID,
 	}
 
 	// Enqueue to agent's queue
@@ -246,6 +259,9 @@ func (s *Server) executeViaPoolStreaming(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	// Extract session ID from header for session affinity (Phase 2)
+	sessionID := r.Header.Get(pool.sessionConfig.Key)
+
 	// Create SSE writer
 	sseWriter := runtime.NewSSEWriter(w)
 	if sseWriter == nil {
@@ -276,7 +292,8 @@ func (s *Server) executeViaPoolStreaming(w http.ResponseWriter, r *http.Request,
 		Input:      req.Input,
 		Context:    r.Context(),
 		ResponseCh: make(chan *scaling.Response, 1),
-		StreamCh:   streamCh, // Enable streaming
+		StreamCh:   streamCh,    // Enable streaming
+		SessionID:  sessionID,   // Session affinity (Phase 2)
 	}
 
 	// Enqueue request
@@ -537,6 +554,22 @@ func (s *Server) handleDeleteAgentByName(w http.ResponseWriter, agentName string
 			// Continue - registry already cleaned up
 		} else {
 			log.Printf("[handler] Removed agent directory: %s", agentDir)
+		}
+	}
+
+	// Delete workspace directory
+	workspaceBaseDir := "/var/lib/orpheus/workspaces"
+	if _, statErr := os.Stat("/var/lib/orpheus"); os.IsNotExist(statErr) {
+		home, _ := os.UserHomeDir()
+		workspaceBaseDir = filepath.Join(home, ".orpheus", "workspaces")
+	}
+	workspaceDir := filepath.Join(workspaceBaseDir, agentName)
+	if workspaceDir != "" && workspaceDir != "/" && workspaceDir != "." {
+		if removeErr := os.RemoveAll(workspaceDir); removeErr != nil {
+			log.Printf("[handler] Warning: Failed to remove workspace '%s': %v", workspaceDir, removeErr)
+			// Continue - agent already cleaned up
+		} else {
+			log.Printf("[handler] Removed workspace directory: %s", workspaceDir)
 		}
 	}
 
@@ -839,4 +872,145 @@ func computeDerivedMetrics(queueStats *QueueStatsResponse, poolStats *PoolStatsR
 		RequestsPerWorker:     requestsPerWorker,
 		PoolEfficiency:        efficiency,
 	}
+}
+
+// ============================================================================
+// Workspace Endpoints
+// ============================================================================
+
+// WorkspaceInfoResponse represents workspace information for an agent.
+type WorkspaceInfoResponse struct {
+	AgentName string           `json:"agent_name"`
+	Path      string           `json:"path"`
+	SizeBytes int64            `json:"size_bytes"`
+	FileCount int              `json:"file_count"`
+	Files     map[string]int64 `json:"files,omitempty"` // filename → size
+	Exists    bool             `json:"exists"`
+}
+
+// WorkspaceCleanResponse represents the result of cleaning a workspace.
+type WorkspaceCleanResponse struct {
+	Status     string `json:"status"`
+	AgentName  string `json:"agent_name"`
+	FreedBytes int64  `json:"freed_bytes"`
+}
+
+// resolveWorkspacePathByName returns the workspace directory path for an agent by name.
+func resolveWorkspacePathByName(agentName string) string {
+	workspaceBaseDir := "/var/lib/orpheus/workspaces"
+	if _, statErr := os.Stat("/var/lib/orpheus"); os.IsNotExist(statErr) {
+		home, _ := os.UserHomeDir()
+		workspaceBaseDir = filepath.Join(home, ".orpheus", "workspaces")
+	}
+	return filepath.Join(workspaceBaseDir, agentName)
+}
+
+// getDirectoryInfo calculates the total size and file count of a directory.
+func getDirectoryInfo(path string) (sizeBytes int64, fileCount int, files map[string]int64, err error) {
+	files = make(map[string]int64)
+
+	err = filepath.Walk(path, func(filePath string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !info.IsDir() {
+			sizeBytes += info.Size()
+			fileCount++
+			// Store relative path
+			relPath, _ := filepath.Rel(path, filePath)
+			files[relPath] = info.Size()
+		}
+		return nil
+	})
+
+	return sizeBytes, fileCount, files, err
+}
+
+// handleWorkspaceInfo returns workspace information for an agent.
+// GET /v1/agents/{name}/workspace
+func (s *Server) handleWorkspaceInfo(w http.ResponseWriter, r *http.Request, agentName string) {
+	// Verify agent exists
+	if _, err := s.registry.Get(agentName); err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("agent not found: %s", agentName))
+		return
+	}
+
+	workspacePath := resolveWorkspacePathByName(agentName)
+
+	response := WorkspaceInfoResponse{
+		AgentName: agentName,
+		Path:      workspacePath,
+		Exists:    false,
+		Files:     make(map[string]int64),
+	}
+
+	// Check if workspace exists
+	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
+		// Workspace doesn't exist yet - return empty response
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+
+	response.Exists = true
+
+	// Get directory info
+	sizeBytes, fileCount, files, err := getDirectoryInfo(workspacePath)
+	if err != nil {
+		log.Printf("[workspace] Error reading workspace '%s': %v", workspacePath, err)
+		// Still return what we have
+	}
+
+	response.SizeBytes = sizeBytes
+	response.FileCount = fileCount
+	response.Files = files
+
+	writeJSON(w, http.StatusOK, response)
+}
+
+// handleWorkspaceClean removes workspace contents (keeps directory).
+// DELETE /v1/agents/{name}/workspace
+func (s *Server) handleWorkspaceClean(w http.ResponseWriter, r *http.Request, agentName string) {
+	// Verify agent exists
+	if _, err := s.registry.Get(agentName); err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("agent not found: %s", agentName))
+		return
+	}
+
+	workspacePath := resolveWorkspacePathByName(agentName)
+
+	// Check if workspace exists
+	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
+		// Workspace doesn't exist - nothing to clean
+		writeJSON(w, http.StatusOK, WorkspaceCleanResponse{
+			Status:     "success",
+			AgentName:  agentName,
+			FreedBytes: 0,
+		})
+		return
+	}
+
+	// Calculate size before cleanup
+	sizeBytes, _, _, _ := getDirectoryInfo(workspacePath)
+
+	// Remove all contents but keep the directory
+	entries, err := os.ReadDir(workspacePath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read workspace: %v", err))
+		return
+	}
+
+	for _, entry := range entries {
+		entryPath := filepath.Join(workspacePath, entry.Name())
+		if err := os.RemoveAll(entryPath); err != nil {
+			log.Printf("[workspace] Warning: Failed to remove '%s': %v", entryPath, err)
+		}
+	}
+
+	log.Printf("[workspace] Cleaned workspace for '%s': freed %d bytes", agentName, sizeBytes)
+
+	writeJSON(w, http.StatusOK, WorkspaceCleanResponse{
+		Status:     "success",
+		AgentName:  agentName,
+		FreedBytes: sizeBytes,
+	})
 }

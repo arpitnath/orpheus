@@ -3,6 +3,29 @@ package config
 
 import "time"
 
+// SessionConfig holds session affinity configuration for stateful agents.
+// When enabled, requests with the same session ID are routed to the same worker
+// when possible, enabling in-memory state continuity across requests.
+type SessionConfig struct {
+	Enabled     bool          `yaml:"enabled"`      // Enable session affinity (default: false)
+	Key         string        `yaml:"key"`          // HTTP header name to extract session ID (default: X-Session-ID)
+	TTL         time.Duration `yaml:"ttl"`          // Session memory duration (default: 30m)
+	WaitTimeout time.Duration `yaml:"wait_timeout"` // Max wait for preferred worker (default: 100ms)
+}
+
+// SetDefaults applies default values to SessionConfig fields.
+func (c *SessionConfig) SetDefaults() {
+	if c.Key == "" {
+		c.Key = DefaultSessionKey
+	}
+	if c.TTL == 0 {
+		c.TTL = DefaultSessionTTL
+	}
+	if c.WaitTimeout == 0 {
+		c.WaitTimeout = DefaultSessionWaitTimeout
+	}
+}
+
 // AgentConfig represents the parsed agent.yaml configuration
 type AgentConfig struct {
 	// Required fields from YAML
@@ -24,6 +47,9 @@ type AgentConfig struct {
 	TimeoutSec       int `yaml:"timeout,omitempty"`        // Max total time in seconds (hard limit)
 	IdleTimeoutSec   int `yaml:"idle_timeout,omitempty"`   // No activity timeout in seconds
 	ActivityCheckSec int `yaml:"activity_check,omitempty"` // Activity check interval in seconds
+
+	// Session affinity configuration
+	Session SessionConfig `yaml:"session,omitempty"`
 
 	// Internal fields (not from YAML, computed at load time)
 	AgentDir      string        `yaml:"-"`
@@ -50,6 +76,11 @@ const (
 	DefaultTimeout       = 300 * time.Second // 5 min max total
 	DefaultIdleTimeout   = 60 * time.Second  // 60s no activity = stuck
 	DefaultActivityCheck = 5 * time.Second   // Check every 5s
+
+	// Session affinity defaults
+	DefaultSessionKey         = "X-Session-ID"        // HTTP header name
+	DefaultSessionTTL         = 30 * time.Minute      // Session memory duration
+	DefaultSessionWaitTimeout = 100 * time.Millisecond // Max wait for preferred worker
 
 	// Runtime defaults
 	DefaultRuntime = RuntimePython3

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"orpheus/daemon/pkg/config"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/scaling"
 
@@ -24,6 +25,9 @@ type AgentPool struct {
 	queue     *scaling.RequestQueue
 	pool      *scaling.BasicWorkerPool
 	policy    scaling.ScalingPolicy
+
+	// Session affinity configuration
+	sessionConfig config.SessionConfig
 
 	// Per-agent lifecycle
 	workerCtx    context.Context
@@ -89,14 +93,18 @@ func (pm *PoolManager) CreatePool(agentName string) error {
 	// Create per-agent context
 	workerCtx, workerCancel := context.WithCancel(pm.ctx)
 
+	// Load session affinity config from agent.yaml
+	sessionConfig := pm.loadSessionConfig(agent.Path)
+
 	agentPool := &AgentPool{
-		agentName:    agentName,
-		agentPath:    agent.Path,
-		queue:        queue,
-		pool:         pool,
-		policy:       policy,
-		workerCtx:    workerCtx,
-		workerCancel: workerCancel,
+		agentName:     agentName,
+		agentPath:     agent.Path,
+		queue:         queue,
+		pool:          pool,
+		policy:        policy,
+		sessionConfig: sessionConfig,
+		workerCtx:     workerCtx,
+		workerCancel:  workerCancel,
 	}
 
 	// Register with autoscaler
@@ -185,7 +193,17 @@ func (pm *PoolManager) workerLoop(agentPool *AgentPool) {
 		}
 
 		// Get worker from THIS agent's pool
-		worker, err := agentPool.pool.GetIdleWorker(req.Context)
+		// Use session-aware acquisition if session affinity is enabled
+		var worker scaling.Worker
+		if req.SessionID != "" && agentPool.sessionConfig.Enabled {
+			worker, err = agentPool.pool.AcquireForSession(
+				req.Context,
+				req.SessionID,
+				agentPool.sessionConfig.WaitTimeout,
+			)
+		} else {
+			worker, err = agentPool.pool.GetIdleWorker(req.Context)
+		}
 		if err != nil {
 			// Failed to get worker - send error response
 			req.ResponseCh <- &scaling.Response{
@@ -428,6 +446,54 @@ func (pm *PoolManager) buildPolicyFromValues(
 	}
 
 	return policy, resultQueueSize
+}
+
+// loadSessionConfig loads session affinity configuration from agent.yaml or returns defaults.
+func (pm *PoolManager) loadSessionConfig(agentPath string) config.SessionConfig {
+	sessionConfig := config.SessionConfig{}
+
+	// Try to load explicit session config from agent.yaml
+	agentYAML := filepath.Join(agentPath, "agent.yaml")
+	if _, err := os.Stat(agentYAML); err == nil {
+		data, readErr := os.ReadFile(agentYAML)
+		if readErr == nil {
+			var agentCfg struct {
+				Session struct {
+					Enabled     bool   `yaml:"enabled"`
+					Key         string `yaml:"key"`
+					TTL         string `yaml:"ttl"`
+					WaitTimeout string `yaml:"wait_timeout"`
+				} `yaml:"session"`
+			}
+
+			if yamlErr := yaml.Unmarshal(data, &agentCfg); yamlErr == nil {
+				sessionConfig.Enabled = agentCfg.Session.Enabled
+				sessionConfig.Key = agentCfg.Session.Key
+
+				// Parse durations
+				if agentCfg.Session.TTL != "" {
+					if d, err := time.ParseDuration(agentCfg.Session.TTL); err == nil {
+						sessionConfig.TTL = d
+					}
+				}
+				if agentCfg.Session.WaitTimeout != "" {
+					if d, err := time.ParseDuration(agentCfg.Session.WaitTimeout); err == nil {
+						sessionConfig.WaitTimeout = d
+					}
+				}
+			}
+		}
+	}
+
+	// Apply defaults for missing fields
+	sessionConfig.SetDefaults()
+
+	if sessionConfig.Enabled {
+		log.Printf("[pool-manager] Session affinity enabled for '%s' (key=%s, ttl=%v, wait_timeout=%v)",
+			filepath.Base(agentPath), sessionConfig.Key, sessionConfig.TTL, sessionConfig.WaitTimeout)
+	}
+
+	return sessionConfig
 }
 
 // validateScalingConfig validates a scaling configuration against OSS safety limits.

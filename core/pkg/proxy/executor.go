@@ -34,6 +34,10 @@ type ExecuteOptions struct {
 	// RootFSPath is the path to deployed agent image directory
 	RootFSPath string
 
+	// WorkspacePath is the host path to the agent's persistent workspace directory
+	// Will be mounted at /workspace in the container with WORKSPACE_DIR env var
+	WorkspacePath string
+
 	// Memory configuration (Agent-Native: Graceful Degradation)
 	MemoryTarget int  // Target memory in MB (soft limit - fast tier)
 	MemoryLimit  int  // Hard limit in MB (with swap)
@@ -107,9 +111,27 @@ func runWithRunc(ctx context.Context, cfg *config.AgentConfig, opts *ExecuteOpti
 	// Generate UUID-based container ID (prevents collisions)
 	containerID := fmt.Sprintf("agent-%s", uuid.New().String())
 
-	// Generate OCI bundle
+	// Build spec options for bundle generation
+	specOpts := &oci.SpecOptions{
+		RootfsPath: opts.RootFSPath,
+	}
+
+	// Add workspace mount if specified
+	if opts != nil && opts.WorkspacePath != "" {
+		specOpts.AdditionalMounts = []oci.Mount{
+			{
+				Destination: "/workspace",
+				Type:        "bind",
+				Source:      opts.WorkspacePath,
+				Options:     []string{"bind", "rw"},
+			},
+		}
+		specOpts.AdditionalEnv = []string{"WORKSPACE_DIR=/workspace"}
+	}
+
+	// Generate OCI bundle with options
 	bundleGen := oci.NewBundleGenerator()
-	bundle, err := bundleGen.GenerateBundle(cfg, opts.RootFSPath, containerID)
+	bundle, err := bundleGen.GenerateBundleWithOptions(cfg, opts.RootFSPath, containerID, specOpts)
 	if err != nil {
 		return NewErrorResult(fmt.Sprintf("bundle generation: %v", err), "", 1, time.Since(startTime))
 	}
