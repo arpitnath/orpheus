@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"orpheus/daemon/pkg/auth"
+	"orpheus/daemon/pkg/execlog"
 	"orpheus/daemon/pkg/mcp"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/scaling"
@@ -38,6 +39,7 @@ type Server struct {
 
 	// ExecLog directory (for execution logging)
 	execlogDir string
+	retention  *execlog.Retention // ExecLog retention manager
 
 	// Autoscaling (NEW - integrates pkg/scaling)
 	poolManager *PoolManager
@@ -127,6 +129,11 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	s.poolManager = poolManager
 	log.Printf("Pool manager initialized")
 
+	// Initialize execlog retention (30 days, cleanup every 24 hours)
+	retention := execlog.NewRetention(execlogDir, 30, 24*time.Hour)
+	s.retention = retention
+	log.Printf("ExecLog retention initialized (retention=30d, interval=24h)")
+
 	mux := http.NewServeMux()
 
 	// RESTful agent routes
@@ -172,6 +179,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			return fmt.Errorf("start autoscaler: %w", err)
 		}
 		log.Printf("Autoscaler started")
+	}
+
+	// Start retention cleanup
+	if s.retention != nil {
+		if err := s.retention.Start(s.ctx); err != nil {
+			return fmt.Errorf("start retention: %w", err)
+		}
 	}
 
 	errChan := make(chan error, 2)
@@ -316,6 +330,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.autoscaler != nil {
 		if err := s.autoscaler.Stop(); err != nil {
 			log.Printf("Error stopping autoscaler: %v", err)
+		}
+	}
+
+	// Stop retention cleanup
+	if s.retention != nil {
+		if err := s.retention.Stop(); err != nil {
+			log.Printf("Error stopping retention: %v", err)
 		}
 	}
 
