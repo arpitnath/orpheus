@@ -17,6 +17,8 @@ import type {
   WorkspaceInfoResponse,
   WorkspaceCleanResponse,
   CrashedRequestsResponse,
+  ExecLogFilters,
+  ExecLogsResponse,
 } from '../types/index.js';
 
 //@HTTP_CLIENT
@@ -219,6 +221,21 @@ export function createClient(_serverName?: string): OrpheusClient {
         '/v1/execlog/crashed',
         serverConfig
       );
+    },
+
+    async getExecLogs(filters?: ExecLogFilters): Promise<ExecLogsResponse> {
+      const params = new URLSearchParams();
+      if (filters?.agent) params.append('agent', filters.agent);
+      if (filters?.status) params.append('status', filters.status);
+      if (filters?.session) params.append('session', filters.session);
+      if (filters?.worker) params.append('worker', filters.worker);
+      if (filters?.limit) params.append('limit', String(filters.limit));
+      if (filters?.offset) params.append('offset', String(filters.offset));
+
+      const query = params.toString();
+      const path = `/v1/execlog${query ? '?' + query : ''}`;
+
+      return makeRequest<ExecLogsResponse>('GET', path, serverConfig);
     },
 
     close(): void {

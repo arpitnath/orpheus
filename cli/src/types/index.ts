@@ -169,6 +169,36 @@ export interface CrashedRequestsResponse {
   count: number;
 }
 
+export interface ExecLogEntry {
+  request_id: string;
+  agent_name: string;
+  state: string;
+  worker_id?: string;
+  session_id?: string;
+  timestamp: string;
+  duration_ms?: number;
+  error?: string;
+}
+
+export interface ExecLogFilters {
+  agent?: string;
+  status?: string;
+  session?: string;
+  worker?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ExecLogsResponse {
+  data: ExecLogEntry[];
+  count: number;
+  total: number;
+  page: number;
+  limit: number;
+  offset: number;
+  total_pages: number;
+}
+
 //@CLIENT_TYPES
 export interface OrpheusClient {
   health(): Promise<HealthResponse>;
@@ -181,6 +211,7 @@ export interface OrpheusClient {
   workspaceInfo(agentName: string): Promise<WorkspaceInfoResponse>;
   workspaceClean(agentName: string): Promise<WorkspaceCleanResponse>;
   getCrashedRequests(): Promise<CrashedRequestsResponse>;
+  getExecLogs(filters?: ExecLogFilters): Promise<ExecLogsResponse>;
   close(): void;
 }
 

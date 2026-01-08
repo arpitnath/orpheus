@@ -16,6 +16,7 @@ import (
 	"orpheus/daemon/pkg/runtime"
 	"orpheus/daemon/pkg/scaling"
 	"github.com/google/uuid"
+	"strconv"
 )
 
 // handleAgentResource routes RESTful agent requests based on path.
@@ -1096,5 +1097,135 @@ func (s *Server) handleExecLogCrashed(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"crashed_requests": allCrashed,
 		"count":            len(allCrashed),
+	})
+}
+
+// handleExecLog returns filtered and paginated execution logs
+// GET /v1/execlog?agent=xxx&status=xxx&session=xxx&worker=xxx&limit=50&offset=0
+func (s *Server) handleExecLog(w http.ResponseWriter, r *http.Request) {
+	// Only support GET
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Parse query parameters
+	agentFilter := r.URL.Query().Get("agent")
+	statusFilter := r.URL.Query().Get("status")
+	sessionFilter := r.URL.Query().Get("session")
+	workerFilter := r.URL.Query().Get("worker")
+
+	// Parse pagination (default limit: 50, max: 1000)
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	// Get all deployed agents
+	agents, err := s.registry.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list agents: %v", err))
+		return
+	}
+
+	// Filter agents if specified
+	var filteredAgents []registry.RegisteredAgent
+	if agentFilter != "" {
+		for _, agent := range agents {
+			if agent.Name == agentFilter {
+				filteredAgents = append(filteredAgents, agent)
+				break
+			}
+		}
+	} else {
+		filteredAgents = agents
+	}
+
+	// Query each agent's execlog
+	var allLogs []map[string]interface{}
+	totalCount := 0
+
+	for _, agent := range filteredAgents {
+		reader, err := execlog.NewReader(s.execlogDir, agent.Name)
+		if err != nil {
+			continue // Skip if no execlog for this agent
+		}
+
+		// Build filters
+		filters := &execlog.ExecLogFilters{
+			Status:    statusFilter,
+			WorkerID:  workerFilter,
+			SessionID: sessionFilter,
+			Limit:     limit,
+			Offset:    offset,
+		}
+
+		// Get logs
+		logs, err := reader.GetExecutionLogs(filters)
+		if err != nil {
+			log.Printf("Warning: Failed to query logs for %s: %v", agent.Name, err)
+			reader.Close()
+			continue
+		}
+
+		// Get total count
+		count, err := reader.GetExecutionLogsCount(filters)
+		reader.Close()
+
+		if err != nil {
+			log.Printf("Warning: Failed to count logs for %s: %v", agent.Name, err)
+		} else {
+			totalCount += count
+		}
+
+		// Convert to response format
+		for _, entry := range logs {
+			logMap := map[string]interface{}{
+				"request_id": entry.RequestID,
+				"agent_name": agent.Name,
+				"state":      entry.State,
+				"timestamp":  time.Unix(0, entry.Timestamp).Format(time.RFC3339),
+			}
+			if entry.WorkerID != nil {
+				logMap["worker_id"] = *entry.WorkerID
+			}
+			if entry.SessionID != nil {
+				logMap["session_id"] = *entry.SessionID
+			}
+			if entry.DurationMs != nil {
+				logMap["duration_ms"] = *entry.DurationMs
+			}
+			if entry.Error != nil {
+				logMap["error"] = *entry.Error
+			}
+
+			allLogs = append(allLogs, logMap)
+		}
+	}
+
+	// Calculate pagination metadata
+	page := (offset / limit) + 1
+	totalPages := 0
+	if totalCount > 0 {
+		totalPages = (totalCount + limit - 1) / limit
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"data":        allLogs,
+		"count":       len(allLogs),
+		"total":       totalCount,
+		"page":        page,
+		"limit":       limit,
+		"offset":      offset,
+		"total_pages": totalPages,
 	})
 }

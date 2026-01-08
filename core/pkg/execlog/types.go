@@ -30,3 +30,25 @@ type CrashedRequest struct {
 	SessionID  *string
 	StartedAt  time.Time
 }
+
+// ExecLogFilters defines filtering and pagination parameters
+type ExecLogFilters struct {
+	Status    string
+	WorkerID  string
+	SessionID string
+	StartTime int64 // Unix nano
+	EndTime   int64 // Unix nano
+	Limit     int
+	Offset    int
+}
+
+// ExecLogEntry represents a single execution log entry
+type ExecLogEntry struct {
+	RequestID  string
+	State      string
+	WorkerID   *string
+	SessionID  *string
+	Timestamp  int64
+	DurationMs *int64
+	Error      *string
+}

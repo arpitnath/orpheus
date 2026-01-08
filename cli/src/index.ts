@@ -975,6 +975,99 @@ execlogCommand
     renderApp(React.createElement(ExecLogCrashed));
   });
 
+execlogCommand
+  .command('list')
+  .description('List execution logs')
+  .argument('[agent]', 'Filter by agent name')
+  .option('-s, --status <status>', 'Filter by status (QUEUED, STARTED, COMPLETED, FAILED, CRASHED)')
+  .option('--session <id>', 'Filter by session ID')
+  .option('-w, --worker <id>', 'Filter by worker ID')
+  .option('-n, --limit <count>', 'Number of records to show', '50')
+  .option('--offset <num>', 'Pagination offset', '0')
+  .option('-f, --format <format>', 'Output format (table, json)', 'table')
+  .action(async (agentName: string | undefined, options: {
+    status?: string;
+    session?: string;
+    worker?: string;
+    limit?: string;
+    offset?: string;
+    format?: string;
+  }) => {
+    try {
+      const filters: import('./types/index.js').ExecLogFilters = {
+        agent: agentName,
+        status: options.status,
+        session: options.session,
+        worker: options.worker,
+        limit: parseInt(options.limit || '50', 10),
+        offset: parseInt(options.offset || '0', 10),
+      };
+
+      const client = createClient();
+      const response = await client.getExecLogs(filters);
+
+      if (options.format === 'json') {
+        console.log(JSON.stringify(response, null, 2));
+        return;
+      }
+
+      // Table format
+      if (response.data.length === 0) {
+        console.log(`\n${c.dim}No execution logs found.${c.reset}\n`);
+        return;
+      }
+
+      console.log(`\n${c.bold}Execution Logs${c.reset} (Showing ${response.count} of ${response.total})\n`);
+
+      // Display table header
+      const cols = ['REQUEST ID', 'AGENT', 'STATE', 'WORKER', 'DURATION'];
+      const widths = [16, 20, 10, 16, 10];
+      let header = '';
+      for (let i = 0; i < cols.length; i++) {
+        header += cols[i].padEnd(widths[i]);
+      }
+      console.log(c.dim + header + c.reset);
+      console.log(c.dim + '─'.repeat(72) + c.reset);
+
+      // Display rows
+      for (const log of response.data) {
+        const reqId = log.request_id.substring(0, 12) + '...';
+        const agent = log.agent_name.substring(0, 18);
+        const state = log.state;
+        const worker = log.worker_id ? log.worker_id.substring(0, 14) : '-';
+        const duration = log.duration_ms ? `${log.duration_ms}ms` : '-';
+
+        // Color code state
+        let stateColored = state;
+        if (state === 'COMPLETED') stateColored = c.green + state + c.reset;
+        else if (state === 'FAILED') stateColored = c.red + state + c.reset;
+        else if (state === 'CRASHED') stateColored = c.yellow + state + c.reset;
+        else if (state === 'QUEUED') stateColored = c.dim + state + c.reset;
+        else if (state === 'STARTED') stateColored = c.cyan + state + c.reset;
+
+        console.log(
+          reqId.padEnd(widths[0]) +
+          agent.padEnd(widths[1]) +
+          stateColored.padEnd(widths[2] + (stateColored.length - state.length)) +
+          worker.padEnd(widths[3]) +
+          duration.padEnd(widths[4])
+        );
+      }
+
+      // Pagination info
+      if (response.total_pages > 1) {
+        console.log(`\n${c.dim}Page ${response.page} of ${response.total_pages}${c.reset}`);
+        if (response.page < response.total_pages) {
+          console.log(`${c.dim}Next: orpheus execlog list --offset ${response.offset + response.limit}${c.reset}`);
+        }
+      }
+      console.log('');
+    } catch (err) {
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
 //@HELPERS
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
