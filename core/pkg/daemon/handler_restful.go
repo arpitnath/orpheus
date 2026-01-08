@@ -161,7 +161,7 @@ func (s *Server) executeViaPool(w http.ResponseWriter, r *http.Request, agentNam
 			log.Printf("Warning: Failed to create execlog writer: %v", err)
 			return
 		}
-		defer writer.Close()
+		// Don't close - writer is cached and reused
 
 		err = writer.Log(&execlog.Event{
 			Timestamp: time.Now(),
@@ -1042,4 +1042,59 @@ func ptrOrNil(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// handleExecLogCrashed returns all crashed requests across all agents
+// GET /v1/execlog/crashed
+func (s *Server) handleExecLogCrashed(w http.ResponseWriter, r *http.Request) {
+	// Only support GET
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Get all deployed agents
+	agents, err := s.registry.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list agents: %v", err))
+		return
+	}
+
+	// Query each agent's execlog for crashed requests
+	var allCrashed []map[string]interface{}
+
+	for _, agent := range agents {
+		reader, err := execlog.NewReader(s.execlogDir, agent.Name)
+		if err != nil {
+			// Skip if execlog doesn't exist for this agent
+			continue
+		}
+
+		crashed, err := reader.GetCrashedRequests()
+		reader.Close()
+
+		if err != nil {
+			log.Printf("Warning: Failed to read crashed for %s: %v", agent.Name, err)
+			continue
+		}
+
+		// Convert to response format
+		for _, req := range crashed {
+			crashedMap := map[string]interface{}{
+				"request_id":  req.RequestID,
+				"agent_name":  agent.Name,
+				"worker_id":   req.WorkerID,
+				"started_at":  req.StartedAt.Format(time.RFC3339),
+			}
+			if req.SessionID != nil {
+				crashedMap["session_id"] = *req.SessionID
+			}
+			allCrashed = append(allCrashed, crashedMap)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"crashed_requests": allCrashed,
+		"count":            len(allCrashed),
+	})
 }

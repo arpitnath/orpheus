@@ -156,6 +156,19 @@ export interface ContainerInfo {
   pid?: number;
 }
 
+export interface CrashedRequest {
+  request_id: string;
+  agent_name: string;
+  worker_id: string;
+  started_at: string;
+  session_id?: string;
+}
+
+export interface CrashedRequestsResponse {
+  crashed_requests: CrashedRequest[];
+  count: number;
+}
+
 //@CLIENT_TYPES
 export interface OrpheusClient {
   health(): Promise<HealthResponse>;
@@ -167,6 +180,7 @@ export interface OrpheusClient {
   inspect(agentName: string): Promise<AgentDetails>;
   workspaceInfo(agentName: string): Promise<WorkspaceInfoResponse>;
   workspaceClean(agentName: string): Promise<WorkspaceCleanResponse>;
+  getCrashedRequests(): Promise<CrashedRequestsResponse>;
   close(): void;
 }
 

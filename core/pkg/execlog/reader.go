@@ -27,19 +27,15 @@ func NewReader(execlogDir, agentName string) (*Reader, error) {
 	return &Reader{db: db}, nil
 }
 
-// GetCrashedRequests finds requests that were STARTED but never reached a terminal state
+// GetCrashedRequests returns all requests that have been marked as CRASHED
 func (r *Reader) GetCrashedRequests() ([]*CrashedRequest, error) {
 	rows, err := r.db.Query(`
-		SELECT request_id, worker_id, session_id, MIN(timestamp) as started_at
-		FROM events
-		WHERE state = ?
-		  AND request_id NOT IN (
-			  SELECT request_id FROM events
-			  WHERE state IN (?, ?, ?)
-		  )
-		GROUP BY request_id
-		ORDER BY timestamp DESC
-	`, StateStarted, StateCompleted, StateFailed, StateCrashed)
+		SELECT DISTINCT e1.request_id, e1.worker_id, e1.session_id, e2.timestamp as started_at
+		FROM events e1
+		JOIN events e2 ON e1.request_id = e2.request_id AND e2.state = ?
+		WHERE e1.state = ?
+		ORDER BY e1.timestamp DESC
+	`, StateStarted, StateCrashed)
 
 	if err != nil {
 		return nil, fmt.Errorf("query crashed requests: %w", err)

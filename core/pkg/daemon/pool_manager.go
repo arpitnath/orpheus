@@ -871,7 +871,7 @@ func (pm *PoolManager) logExecLogEvent(agentName string, event *execlog.Event) {
 		log.Printf("Warning: ExecLog writer error: %v", err)
 		return
 	}
-	defer writer.Close()
+	// Don't close - writer is cached and reused
 
 	event.Timestamp = time.Now()
 	if err := writer.Log(event); err != nil {

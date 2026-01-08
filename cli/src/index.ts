@@ -29,6 +29,7 @@ import { renderApp } from './lib/render.js';
 import { DeployProgress } from './components/DeployProgress.js';
 import { Status } from './components/Status.js';
 import { AgentList } from './components/AgentList.js';
+import { ExecLogCrashed } from './components/ExecLogCrashed.js';
 import { AgentPs } from './components/AgentPs.js';
 import { AgentInspect } from './components/inspect/index.js';
 import { PoolStats } from './components/PoolStats.js';
@@ -962,6 +963,16 @@ workspaceCommand
       console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
+  });
+
+//@EXECLOG_COMMANDS
+const execlogCommand = program.command('execlog').description('View execution logs');
+
+execlogCommand
+  .command('crashed')
+  .description('Show crashed requests')
+  .action(async () => {
+    renderApp(React.createElement(ExecLogCrashed));
   });
 
 //@HELPERS

@@ -135,8 +135,9 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 
 	// Core endpoints
 	mux.HandleFunc("/v1/health", s.handleHealth)
-	mux.HandleFunc("/v1/deploy", s.handleDeploy) // POST /v1/deploy
-	mux.HandleFunc("/v1/stats", s.handleStats)   // GET /v1/stats (Phase 3)
+	mux.HandleFunc("/v1/deploy", s.handleDeploy)        // POST /v1/deploy
+	mux.HandleFunc("/v1/stats", s.handleStats)          // GET /v1/stats (Phase 3)
+	mux.HandleFunc("/v1/execlog/crashed", s.handleExecLogCrashed) // GET crashed requests
 
 	// Initialize MCP if TCP is enabled (MCP requires authenticated access)
 	if config.TCP.Enabled {

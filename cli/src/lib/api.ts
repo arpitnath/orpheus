@@ -16,6 +16,7 @@ import type {
   DeployOptions,
   WorkspaceInfoResponse,
   WorkspaceCleanResponse,
+  CrashedRequestsResponse,
 } from '../types/index.js';
 
 //@HTTP_CLIENT
@@ -208,6 +209,14 @@ export function createClient(_serverName?: string): OrpheusClient {
       return makeRequest<WorkspaceCleanResponse>(
         'DELETE',
         `/v1/agents/${encodeURIComponent(agentName)}/workspace`,
+        serverConfig
+      );
+    },
+
+    async getCrashedRequests(): Promise<CrashedRequestsResponse> {
+      return makeRequest<CrashedRequestsResponse>(
+        'GET',
+        '/v1/execlog/crashed',
         serverConfig
       );
     },
