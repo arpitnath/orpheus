@@ -867,7 +867,112 @@ serverCommand
     }
   });
 
+//@WORKSPACE_COMMANDS
+const workspaceCommand = program.command('workspace').description('Manage agent workspaces');
+
+workspaceCommand
+  .command('info <agent>')
+  .description('Show workspace information')
+  .option('-f, --format <format>', 'Output format (json, text)', 'text')
+  .action(async (agentName: string, options: { format?: string }) => {
+    try {
+      const client = createClient();
+      const info = await client.workspaceInfo(agentName);
+
+      if (options.format === 'json') {
+        console.log(JSON.stringify(info, null, 2));
+        return;
+      }
+
+      console.log(`\n${c.cyan}Workspace:${c.reset} ${agentName}`);
+      console.log(`  ${label('Path', info.path)}`);
+      console.log(`  ${label('Exists', info.exists ? c.green + 'yes' + c.reset : c.dim + 'no' + c.reset)}`);
+
+      if (info.exists) {
+        console.log(`  ${label('Size', formatBytes(info.size_bytes))}`);
+        console.log(`  ${label('Files', String(info.file_count))}`);
+
+        if (info.files && Object.keys(info.files).length > 0) {
+          console.log(`\n  ${c.dim}Contents:${c.reset}`);
+          for (const [file, size] of Object.entries(info.files)) {
+            console.log(`    ${file.padEnd(30)} ${formatBytes(size)}`);
+          }
+        }
+      } else {
+        console.log(`\n  ${c.dim}No workspace data yet. Run the agent to create workspace.${c.reset}`);
+      }
+      console.log('');
+    } catch (err) {
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
+workspaceCommand
+  .command('clean <agent>')
+  .description('Clean workspace (delete persistent data)')
+  .option('-f, --force', 'Skip confirmation')
+  .action(async (agentName: string, options: { force?: boolean }) => {
+    try {
+      const client = createClient();
+
+      // Get workspace info first to show what will be deleted
+      const info = await client.workspaceInfo(agentName);
+
+      if (!info.exists || info.size_bytes === 0) {
+        console.log(`${c.dim}Workspace is already empty.${c.reset}`);
+        return;
+      }
+
+      // Show what will be deleted
+      console.log(`\n${c.yellow}Workspace:${c.reset} ${agentName}`);
+      console.log(`  ${label('Path', info.path)}`);
+      console.log(`  ${label('Size', formatBytes(info.size_bytes))}`);
+      console.log(`  ${label('Files', String(info.file_count))}`);
+
+      // Confirm unless --force
+      if (!options.force) {
+        const readline = await import('node:readline');
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+
+        const answer = await new Promise<string>((resolve) => {
+          rl.question(`\n${c.yellow}Clean workspace? This will delete all persistent data. [y/N]:${c.reset} `, resolve);
+        });
+        rl.close();
+
+        if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+          console.log(`${c.dim}Cancelled.${c.reset}`);
+          return;
+        }
+      }
+
+      // Clean workspace
+      const result = await client.workspaceClean(agentName);
+
+      if (result.status === 'success') {
+        console.log(`\n${c.green}✓${c.reset} Workspace cleaned (${formatBytes(result.freed_bytes)} freed)`);
+      } else {
+        console.log(`${c.red}✗${c.reset} Failed to clean workspace`);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
 //@HELPERS
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;

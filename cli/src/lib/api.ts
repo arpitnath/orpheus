@@ -14,6 +14,8 @@ import type {
   AgentDetails,
   OrpheusClient,
   DeployOptions,
+  WorkspaceInfoResponse,
+  WorkspaceCleanResponse,
 } from '../types/index.js';
 
 //@HTTP_CLIENT
@@ -69,6 +71,7 @@ async function makeRequest<T>(
           }),
         },
         timeout,
+        agent: false, // Disable connection pooling to prevent header issues
       };
       requestFn = isHttps ? httpsRequest : httpRequest;
     }
@@ -189,6 +192,22 @@ export function createClient(_serverName?: string): OrpheusClient {
       return makeRequest<AgentDetails>(
         'GET',
         `/v1/agents/${encodeURIComponent(agentName)}`,
+        serverConfig
+      );
+    },
+
+    async workspaceInfo(agentName: string): Promise<WorkspaceInfoResponse> {
+      return makeRequest<WorkspaceInfoResponse>(
+        'GET',
+        `/v1/agents/${encodeURIComponent(agentName)}/workspace`,
+        serverConfig
+      );
+    },
+
+    async workspaceClean(agentName: string): Promise<WorkspaceCleanResponse> {
+      return makeRequest<WorkspaceCleanResponse>(
+        'DELETE',
+        `/v1/agents/${encodeURIComponent(agentName)}/workspace`,
         serverConfig
       );
     },
