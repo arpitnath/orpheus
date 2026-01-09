@@ -1,0 +1,7 @@
+name: local-research-agent
+runtime: python3
+module: agent
+entrypoint: handler
+memory: 512
+timeout: 180
+model: mistral

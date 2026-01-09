@@ -51,6 +51,9 @@ type AgentConfig struct {
 	// Session affinity configuration
 	Session SessionConfig `yaml:"session,omitempty"`
 
+	// Model configuration (NEW - ServiceManager)
+	Model string `yaml:"model,omitempty"` // Model name (e.g., "mistral-7b", "openai:gpt-4")
+
 	// Internal fields (not from YAML, computed at load time)
 	AgentDir      string        `yaml:"-"`
 	ConfigPath    string        `yaml:"-"`

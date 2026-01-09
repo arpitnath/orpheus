@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -23,7 +24,40 @@ func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	// Merge runtime environment variable overrides
+	// NEW: If agent specifies a model, inject model server endpoint
+	// POC: Ollama on Mac host, containers in Lima reach via host.lima.internal
+	// Only inject if not already set by user in agent.yaml
+	if cfg.Model != "" {
+		// Check if user already set OPENAI_BASE_URL
+		hasBaseURL := false
+		hasAPIKey := false
+		for _, env := range cfg.Env {
+			if len(env) > 16 && env[:16] == "OPENAI_BASE_URL=" {
+				hasBaseURL = true
+			}
+			if len(env) > 15 && env[:15] == "OPENAI_API_KEY=" {
+				hasAPIKey = true
+			}
+		}
+
+		// Only inject if not user-provided (user's env takes priority)
+		modelEndpoint := "http://host.lima.internal:11434"
+		if !hasBaseURL {
+			cfg.Env = append(cfg.Env,
+				"MODEL_URL="+modelEndpoint,
+				"OPENAI_BASE_URL="+modelEndpoint+"/v1",
+			)
+		}
+		if !hasAPIKey {
+			cfg.Env = append(cfg.Env,
+				"OPENAI_API_KEY=orpheus-internal-key",
+			)
+		}
+
+		log.Printf("[executor] Agent uses model '%s', endpoint: %s", cfg.Model, modelEndpoint)
+	}
+
+	// Merge runtime environment variable overrides (after auto-injection)
 	if len(req.Env) > 0 {
 		for k, v := range req.Env {
 			cfg.Env = append(cfg.Env, k+"="+v)
@@ -88,6 +122,18 @@ func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime
 		for k, v := range req.Env {
 			cfg.Env = append(cfg.Env, k+"="+v)
 		}
+	}
+
+	// NEW: If agent specifies a model, inject model server endpoint
+	// For POC: Assume Ollama at localhost:11434 if model field exists
+	if cfg.Model != "" {
+		modelEndpoint := "http://localhost:11434"
+		cfg.Env = append(cfg.Env,
+			"MODEL_URL="+modelEndpoint,
+			"OPENAI_BASE_URL="+modelEndpoint+"/v1",
+			"OPENAI_API_KEY=orpheus-internal-key",
+		)
+		log.Printf("[executor] Agent uses model '%s', injecting endpoint: %s", cfg.Model, modelEndpoint)
 	}
 
 	// Generate entrypoint

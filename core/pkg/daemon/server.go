@@ -20,6 +20,7 @@ import (
 	"orpheus/daemon/pkg/mcp"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/scaling"
+	"orpheus/daemon/pkg/service"
 )
 
 // Server is the orpheus daemon HTTP server.
@@ -40,6 +41,9 @@ type Server struct {
 	// ExecLog directory (for execution logging)
 	execlogDir string
 	retention  *execlog.Retention // ExecLog retention manager
+
+	// Model server management (ServiceManager)
+	serviceManager *service.Manager
 
 	// Autoscaling (NEW - integrates pkg/scaling)
 	poolManager *PoolManager
@@ -134,6 +138,11 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	s.retention = retention
 	log.Printf("ExecLog retention initialized (retention=30d, interval=24h)")
 
+	// Initialize service manager (model server management)
+	serviceManager := service.NewManager()
+	s.serviceManager = serviceManager
+	log.Printf("ServiceManager initialized (platform-aware model management)")
+
 	mux := http.NewServeMux()
 
 	// RESTful agent routes
@@ -186,6 +195,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		if err := s.retention.Start(s.ctx); err != nil {
 			return fmt.Errorf("start retention: %w", err)
 		}
+	}
+
+	// Start service manager (model server management)
+	if s.serviceManager != nil {
+		if err := s.serviceManager.Start(s.ctx); err != nil {
+			return fmt.Errorf("start service manager: %w", err)
+		}
+		log.Printf("ServiceManager started")
 	}
 
 	errChan := make(chan error, 2)
@@ -337,6 +354,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.retention != nil {
 		if err := s.retention.Stop(); err != nil {
 			log.Printf("Error stopping retention: %v", err)
+		}
+	}
+
+	// Stop service manager (model servers)
+	if s.serviceManager != nil {
+		if err := s.serviceManager.Stop(ctx); err != nil {
+			log.Printf("Error stopping service manager: %v", err)
 		}
 	}
 
