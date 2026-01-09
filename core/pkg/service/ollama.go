@@ -15,19 +15,21 @@ import (
 
 // OllamaServer manages Ollama as a host process (macOS)
 type OllamaServer struct {
-	modelName string
-	endpoint  string
-	cmd       *exec.Cmd
-	state     ServerState
-	mu        sync.RWMutex
+	modelName  string
+	endpoint   string
+	cmd        *exec.Cmd
+	state      ServerState
+	mu         sync.RWMutex
+	httpClient *http.Client
 }
 
 // NewOllamaServer creates a new Ollama server manager
 func NewOllamaServer(modelName string) *OllamaServer {
 	return &OllamaServer{
-		modelName: modelName,
-		endpoint:  "http://localhost:11434",
-		state:     StateStopped,
+		modelName:  modelName,
+		endpoint:   "http://localhost:11434",
+		state:      StateStopped,
+		httpClient: &http.Client{Timeout: 2 * time.Second},
 	}
 }
 
@@ -49,6 +51,10 @@ func (o *OllamaServer) Start(ctx context.Context) error {
 	defer cancel()
 
 	o.cmd = exec.CommandContext(startupCtx, "ollama", "serve")
+	o.cmd.Env = append(os.Environ(),
+		"OLLAMA_NUM_PARALLEL=4",
+		"OLLAMA_MAX_LOADED_MODELS=2",
+	)
 
 	if err := o.cmd.Start(); err != nil {
 		o.state = StateStopped
@@ -100,9 +106,7 @@ func (o *OllamaServer) Stop(ctx context.Context) error {
 
 // Health checks if Ollama is responding
 func (o *OllamaServer) Health(ctx context.Context) (bool, error) {
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	resp, err := client.Get(o.endpoint + "/api/tags")
+	resp, err := o.httpClient.Get(o.endpoint + "/api/tags")
 	if err != nil {
 		return false, err
 	}

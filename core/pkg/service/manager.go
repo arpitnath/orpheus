@@ -202,6 +202,10 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 		return nil
 	}
 
+	if m.state == StateStarting {
+		return m.waitForState(StateReady, ctx)
+	}
+
 	if m.backend == nil {
 		return fmt.Errorf("no backend configured")
 	}
