@@ -12,6 +12,11 @@ bin/
 *.so
 *.dylib
 
+# Orpheus binaries
+core/orpheusd
+core/orpheusd-*
+cli/dist/
+
 # Go
 *.test
 *.out
