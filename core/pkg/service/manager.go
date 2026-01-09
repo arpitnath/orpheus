@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // Manager manages model servers using actor model (race-free)
@@ -18,6 +20,12 @@ type Manager struct {
 	state   ServerState
 	backend ModelServer
 
+	tokenBucket     *TokenBucket
+	backoff         *BackoffCalculator
+	processExitChan chan ExitResult
+	healthEventChan chan HealthEvent
+	process         *os.Process
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -28,11 +36,15 @@ type Manager struct {
 // NewManager creates a new service manager
 func NewManager() *Manager {
 	return &Manager{
-		servers:     make(map[string]ModelServer),
-		commands:    make(chan Command, 10),
-		done:        make(chan struct{}),
-		state:       StateStopped,
-		pidFilePath: "/tmp/orpheus-model-server.lock",
+		servers:         make(map[string]ModelServer),
+		commands:        make(chan Command, 10),
+		done:            make(chan struct{}),
+		state:           StateStopped,
+		pidFilePath:     "/tmp/orpheus-model-server.lock",
+		tokenBucket:     NewTokenBucket(5, 1.0/60.0),
+		backoff:         NewBackoffCalculator(2*time.Second, 60*time.Second, 2.0, 0.2),
+		processExitChan: make(chan ExitResult, 1),
+		healthEventChan: make(chan HealthEvent, 1),
 	}
 }
 
@@ -55,6 +67,12 @@ func (m *Manager) controlLoop() {
 		select {
 		case cmd := <-m.commands:
 			m.handleCommand(cmd)
+
+		case exit := <-m.processExitChan:
+			m.handleProcessExit(exit)
+
+		case event := <-m.healthEventChan:
+			m.handleHealthEvent(event)
 
 		case <-m.done:
 			m.cleanup()
@@ -94,6 +112,91 @@ func (m *Manager) cleanup() {
 	}
 }
 
+func (m *Manager) handleProcessExit(exit ExitResult) {
+	log.Printf("[supervision] Process exited: code=%d", exit.ExitCode)
+
+	if !m.tokenBucket.TryConsume() {
+		log.Printf("[supervision] Circuit breaker open - stopping restart attempts")
+		m.state = StateStopped
+		return
+	}
+
+	delay := m.backoff.Next(exit.ExitCode)
+
+	if delay == 0 {
+		log.Printf("[supervision] Exit code %d - not restarting", exit.ExitCode)
+		m.state = StateStopped
+		return
+	}
+
+	log.Printf("[supervision] Restarting after %v backoff", delay)
+	m.state = StateStarting
+
+	select {
+	case <-time.After(delay):
+	case <-m.ctx.Done():
+		return
+	}
+
+	if err := m.restartWithDoubleKill(m.ctx); err != nil {
+		log.Printf("[supervision] Restart failed: %v", err)
+		m.state = StateStopped
+	}
+}
+
+func (m *Manager) handleHealthEvent(event HealthEvent) {
+	if event.Type == HealthCheckPassed {
+		log.Printf("[supervision] Service healthy - resetting supervision state")
+		m.backoff.Reset()
+		m.tokenBucket.Reset()
+		m.state = StateReady
+	} else {
+		log.Printf("[supervision] Health check failed (%d consecutive) - restarting", event.Failures)
+
+		m.state = StateStopped
+		if err := m.restartWithDoubleKill(m.ctx); err != nil {
+			log.Printf("[supervision] Health-triggered restart failed: %v", err)
+		}
+	}
+}
+
+func (m *Manager) restartWithDoubleKill(ctx context.Context) error {
+	if m.backend == nil {
+		return fmt.Errorf("no backend configured")
+	}
+
+	if m.process != nil {
+		if err := killProcessGracefully(m.process, 5*time.Second); err != nil {
+			log.Printf("[supervision] Force kill zombie: %v", err)
+		}
+		m.process = nil
+	}
+
+	port := 11434
+	if !waitForPortFree(port, 5*time.Second) {
+		return fmt.Errorf("port %d still occupied", port)
+	}
+
+	m.state = StateStarting
+	m.notifySubscribers()
+
+	if err := m.backend.Start(ctx); err != nil {
+		m.state = StateStopped
+		m.notifySubscribers()
+		return err
+	}
+
+	if cmd := m.backend.GetCommand(); cmd != nil {
+		m.process = m.backend.GetProcess()
+		startProcessMonitor(cmd, m.processExitChan)
+	}
+
+	m.state = StateReady
+	m.notifySubscribers()
+
+	return nil
+}
+
 func (m *Manager) ensureRunning(ctx context.Context) error {
 	if m.state == StateReady {
 		return nil
@@ -122,6 +225,11 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 		m.state = StateStopped
 		m.notifySubscribers()
 		return err
+	}
+
+	if cmd := m.backend.GetCommand(); cmd != nil {
+		m.process = m.backend.GetProcess()
+		startProcessMonitor(cmd, m.processExitChan)
 	}
 
 	m.state = StateReady

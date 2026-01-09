@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -144,6 +145,25 @@ func (o *OllamaServer) isRunning() bool {
 
 	healthy, _ := o.Health(ctx)
 	return healthy
+}
+
+// GetProcess returns the OS process handle
+func (o *OllamaServer) GetProcess() *os.Process {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+
+	if o.cmd != nil {
+		return o.cmd.Process
+	}
+	return nil
+}
+
+// GetCommand returns the exec.Cmd for monitoring
+func (o *OllamaServer) GetCommand() *exec.Cmd {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+
+	return o.cmd
 }
 
 // waitForReady waits for Ollama to be ready

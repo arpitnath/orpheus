@@ -1,6 +1,10 @@
 package service
 
-import "context"
+import (
+	"context"
+	"os"
+	"os/exec"
+)
 
 // ServerState represents the current state of a model server
 type ServerState string
@@ -43,6 +47,12 @@ type ModelServer interface {
 
 	// Restart stops and starts the server
 	Restart(ctx context.Context) error
+
+	// GetProcess returns the OS process handle (nil for container-based backends)
+	GetProcess() *os.Process
+
+	// GetCommand returns exec.Cmd for process monitoring (nil for container-based)
+	GetCommand() *exec.Cmd
 }
 
 // ModelConfig specifies model server configuration
@@ -51,4 +61,16 @@ type ModelConfig struct {
 	Server   string            // Server type: "auto", "ollama", "vllm", "external"
 	BaseURL  string            // For external servers
 	Options  map[string]string // Server-specific options
+}
+
+type HealthEventType int
+
+const (
+	HealthCheckFailed HealthEventType = iota
+	HealthCheckPassed
+)
+
+type HealthEvent struct {
+	Type     HealthEventType
+	Failures int
 }
