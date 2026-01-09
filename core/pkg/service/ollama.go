@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -35,7 +36,6 @@ func (o *OllamaServer) Start(ctx context.Context) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	// Check if already running
 	if o.isRunning() {
 		log.Printf("[ollama] Server already running at %s", o.endpoint)
 		o.state = StateReady
@@ -45,8 +45,10 @@ func (o *OllamaServer) Start(ctx context.Context) error {
 	o.state = StateStarting
 	log.Printf("[ollama] Starting Ollama server...")
 
-	// Start Ollama serve
-	o.cmd = exec.Command("ollama", "serve")
+	startupCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	o.cmd = exec.CommandContext(startupCtx, "ollama", "serve")
 
 	if err := o.cmd.Start(); err != nil {
 		o.state = StateStopped
@@ -55,10 +57,12 @@ func (o *OllamaServer) Start(ctx context.Context) error {
 
 	log.Printf("[ollama] Ollama server started (PID: %d)", o.cmd.Process.Pid)
 
-	// Wait for server to be ready
 	o.state = StateLoading
-	if err := o.waitForReady(ctx); err != nil {
-		o.Stop(ctx)
+	if err := o.waitForReady(startupCtx); err != nil {
+		if o.cmd.Process != nil {
+			o.cmd.Process.Kill()
+		}
+		o.state = StateStopped
 		return fmt.Errorf("wait for ready: %w", err)
 	}
 
@@ -104,7 +108,21 @@ func (o *OllamaServer) Health(ctx context.Context) (bool, error) {
 	}
 	defer resp.Body.Close()
 
-	return resp.StatusCode == 200, nil
+	if resp.StatusCode != 200 {
+		return false, nil
+	}
+
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, fmt.Errorf("invalid Ollama response: %w", err)
+	}
+
+	return true, nil
 }
 
 // Endpoint returns the Ollama HTTP endpoint
