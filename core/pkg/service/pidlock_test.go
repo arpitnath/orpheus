@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -146,19 +147,23 @@ func TestPIDLock_RaceCondition(t *testing.T) {
 	lockPath := filepath.Join(tmpDir, "race.pid")
 
 	// Try to acquire lock from 10 goroutines simultaneously
-	successCount := 0
-	errorCount := 0
+	var successCount, errorCount int
+	var mu sync.Mutex
 	done := make(chan bool, 10)
 
 	for i := 0; i < 10; i++ {
 		go func() {
 			unlock, err := acquirePIDLock(lockPath)
 			if err == nil {
+				mu.Lock()
 				successCount++
+				mu.Unlock()
 				time.Sleep(10 * time.Millisecond)
 				unlock()
 			} else {
+				mu.Lock()
 				errorCount++
+				mu.Unlock()
 			}
 			done <- true
 		}()
@@ -169,12 +174,17 @@ func TestPIDLock_RaceCondition(t *testing.T) {
 		<-done
 	}
 
+	// Get final counts (thread-safe)
+	mu.Lock()
+	finalSuccess := successCount
+	finalErrors := errorCount
+	mu.Unlock()
+
 	// Exactly ONE should have succeeded (flock is exclusive)
-	// NOTE: This might be flaky depending on timing, but flock should ensure exclusivity
-	t.Logf("Success: %d, Errors: %d", successCount, errorCount)
+	t.Logf("Success: %d, Errors: %d", finalSuccess, finalErrors)
 
 	// At minimum, not all should succeed (that would be a lock failure)
-	if successCount == 10 {
+	if finalSuccess == 10 {
 		t.Error("All 10 goroutines acquired lock - flock is broken!")
 	}
 }
