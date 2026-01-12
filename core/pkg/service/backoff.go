@@ -35,7 +35,7 @@ func (bc *BackoffCalculator) Next(exitCode int) time.Duration {
 		base = time.Duration(math.Max(float64(base*2), float64(60*time.Second)))
 	}
 
-	next := time.Duration(float64(bc.current) * bc.multiplier)
+	next := time.Duration(float64(base) * bc.multiplier)
 	if next > bc.max {
 		next = bc.max
 	}
