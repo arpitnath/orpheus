@@ -807,67 +807,6 @@ serverCommand
     }
   });
 
-serverCommand
-  .command('create-key')
-  .description('Generate new API key')
-  .option('-n, --name <name>', 'Key name', 'default')
-  .option('--rpm <limit>', 'Rate limit (requests per minute)', '100')
-  .action(async (options: { name?: string; rpm?: string }) => {
-    const { platform } = await import('node:os');
-    const { execSync } = await import('node:child_process');
-
-    try {
-      let output: string;
-      const keyName = options.name || 'default';
-      const rpm = options.rpm || '100';
-
-      if (platform() === 'darwin') {
-        // macOS - use limactl to execute in VM
-        output = execSync(
-          `limactl shell orpheus -- sudo /usr/local/bin/orpheusd create-key --name "${keyName}" --rpm ${rpm}`,
-          { encoding: 'utf-8' }
-        );
-      } else {
-        // Linux - execute directly
-        output = execSync(
-          `sudo orpheusd create-key --name "${keyName}" --rpm ${rpm}`,
-          { encoding: 'utf-8' }
-        );
-      }
-      console.log(output);
-    } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
-  });
-
-serverCommand
-  .command('list-keys')
-  .description('List API keys')
-  .action(async () => {
-    const { platform } = await import('node:os');
-    const { execSync } = await import('node:child_process');
-
-    try {
-      let output: string;
-
-      if (platform() === 'darwin') {
-        // macOS - use limactl to execute in VM
-        output = execSync(
-          'limactl shell orpheus -- sudo /usr/local/bin/orpheusd list-keys',
-          { encoding: 'utf-8' }
-        );
-      } else {
-        // Linux - execute directly
-        output = execSync('sudo orpheusd list-keys', { encoding: 'utf-8' });
-      }
-      console.log(output);
-    } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
-  });
-
 //@WORKSPACE_COMMANDS
 const workspaceCommand = program.command('workspace').description('Manage agent workspaces');
 

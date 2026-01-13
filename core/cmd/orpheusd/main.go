@@ -11,11 +11,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	goruntime "runtime"
-	"strings"
 	"syscall"
 	"time"
 
-	"orpheus/daemon/pkg/auth"
 	"orpheus/daemon/pkg/daemon"
 	"orpheus/daemon/pkg/execlog"
 )
@@ -26,15 +24,6 @@ func main() {
 	// Check for subcommands
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "create-key":
-			runCreateKey()
-			return
-		case "list-keys":
-			runListKeys()
-			return
-		case "revoke-key":
-			runRevokeKey()
-			return
 		case "serve", "start", "run":
 			// Explicit serve command - continue to server logic
 			os.Args = append(os.Args[:1], os.Args[2:]...) // Remove subcommand from args
@@ -152,130 +141,10 @@ func defaultSocket() string {
 	return "/var/run/orpheus.sock"
 }
 
-func getAuthStore() (*auth.Store, error) {
-	// Determine database path
-	dbPath := "/var/lib/orpheus/keys.db"
-	if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
-		home, _ := os.UserHomeDir()
-		dbPath = filepath.Join(home, ".orpheus", "keys.db")
-	}
-
-	return auth.NewStore(dbPath)
-}
-
-func runCreateKey() {
-	fs := flag.NewFlagSet("create-key", flag.ExitOnError)
-	name := fs.String("name", "", "Name for this API key (required)")
-	rpm := fs.Int("rpm", 100, "Requests per minute limit")
-	fs.Parse(os.Args[2:])
-
-	if *name == "" {
-		fmt.Println("Error: --name is required")
-		fmt.Println("Usage: orpheusd create-key --name <name> [--rpm <limit>]")
-		os.Exit(1)
-	}
-
-	store, err := getAuthStore()
-	if err != nil {
-		log.Fatalf("Failed to open auth store: %v", err)
-	}
-	defer store.Close()
-
-	key, err := store.CreateKey(*name, *rpm)
-	if err != nil {
-		log.Fatalf("Failed to create key: %v", err)
-	}
-
-	fmt.Println("")
-	fmt.Println("✓ API Key Created Successfully")
-	fmt.Println("")
-	fmt.Printf("  Name:       %s\n", key.Name)
-	fmt.Printf("  Key:        %s\n", key.Key)
-	fmt.Printf("  Rate Limit: %d requests/minute\n", key.RequestsPerMinute)
-	fmt.Println("")
-	fmt.Println("Share this key securely with the user.")
-	fmt.Println("")
-}
-
-func runListKeys() {
-	store, err := getAuthStore()
-	if err != nil {
-		log.Fatalf("Failed to open auth store: %v", err)
-	}
-	defer store.Close()
-
-	keys, err := store.ListKeys()
-	if err != nil {
-		log.Fatalf("Failed to list keys: %v", err)
-	}
-
-	if len(keys) == 0 {
-		fmt.Println("No API keys found.")
-		fmt.Println("")
-		fmt.Println("Create a key with:")
-		fmt.Println("  orpheusd create-key --name <name>")
-		return
-	}
-
-	fmt.Println("")
-	fmt.Printf("%-20s %-50s %-8s %-20s\n", "NAME", "KEY", "ACTIVE", "RATE LIMIT")
-	fmt.Println(strings.Repeat("-", 100))
-
-	for _, key := range keys {
-		active := "Yes"
-		if !key.IsActive {
-			active = "No"
-		}
-
-		keyDisplay := key.Key
-		if len(keyDisplay) > 50 {
-			keyDisplay = keyDisplay[:47] + "..."
-		}
-
-		fmt.Printf("%-20s %-50s %-8s %-20s\n",
-			key.Name,
-			keyDisplay,
-			active,
-			fmt.Sprintf("%d req/min", key.RequestsPerMinute),
-		)
-	}
-
-	fmt.Println("")
-	fmt.Printf("Total: %d key(s)\n", len(keys))
-	fmt.Println("")
-}
-
-func runRevokeKey() {
-	if len(os.Args) < 3 {
-		fmt.Println("Error: API key required")
-		fmt.Println("Usage: orpheusd revoke-key <key>")
-		os.Exit(1)
-	}
-
-	key := os.Args[2]
-
-	store, err := getAuthStore()
-	if err != nil {
-		log.Fatalf("Failed to open auth store: %v", err)
-	}
-	defer store.Close()
-
-	if err := store.RevokeKey(key); err != nil {
-		log.Fatalf("Failed to revoke key: %v", err)
-	}
-
-	fmt.Println("")
-	fmt.Printf("✓ API key revoked: %s\n", key)
-	fmt.Println("")
-}
-
 func printHelp() {
 	fmt.Printf("orpheusd %s\n\n", version)
 	fmt.Println("Usage:")
 	fmt.Println("  orpheusd [serve] [flags]    Run the daemon server")
-	fmt.Println("  orpheusd create-key [flags] Create a new API key")
-	fmt.Println("  orpheusd list-keys          List all API keys")
-	fmt.Println("  orpheusd revoke-key <key>   Revoke an API key")
 	fmt.Println("")
 	fmt.Println("Server Flags:")
 	fmt.Println("  --socket <path>        Unix socket path (default: OS-specific)")
@@ -292,8 +161,5 @@ func printHelp() {
 	fmt.Println("")
 	fmt.Println("  # Start on both")
 	fmt.Println("  orpheusd --socket /tmp/test.sock --tcp-bind :8080")
-	fmt.Println("")
-	fmt.Println("  # Create API key")
-	fmt.Println("  orpheusd create-key --name developer1 --rpm 100")
 	fmt.Println("")
 }

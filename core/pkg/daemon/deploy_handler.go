@@ -1,8 +1,6 @@
 package daemon
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -307,9 +305,6 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	// Calculate deployed size
 	sizeMB := calculateDirSizeMB(agentDir)
 
-	// Extract org_id from API key (for MCP endpoint)
-	orgID := getOrgIDFromRequest(r)
-
 	// Parse form data to get resolved env vars (sent from CLI)
 	var resolvedEnv []string
 	if envData := r.FormValue("env"); envData != "" {
@@ -350,11 +345,11 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	emit("deploy_progress", "registering", "Agent registered in pool", 90)
 
-	// Build endpoint URLs (NEW RESTful format)
+	// Build endpoint URLs (RESTful format)
 	serverDomain := r.Host // Use request host for now
 	endpoints := map[string]string{
 		"http": fmt.Sprintf("http://%s/v1/agents/%s/run", serverDomain, agentName),
-		"mcp":  fmt.Sprintf("mcp://%s/mcp/%s/agents/%s", serverDomain, orgID, agentName),
+		"mcp":  fmt.Sprintf("mcp://%s/mcp/agents/%s", serverDomain, agentName),
 	}
 
 	// Build success response
@@ -392,32 +387,6 @@ func calculateDirSizeMB(dirPath string) int {
 		return nil
 	})
 	return int(size / (1024 * 1024))
-}
-
-// getOrgIDFromRequest extracts org_id from the API key in the request.
-// For v0.1.0, derives org_id from API key hash.
-// Future: Get org_id from API key database lookup.
-func getOrgIDFromRequest(r *http.Request) string {
-	// Extract API key from Authorization header
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		return "org-unknown"
-	}
-
-	// Parse "Bearer <key>"
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return "org-unknown"
-	}
-
-	apiKey := strings.TrimSpace(parts[1])
-
-	// Derive org_id from API key hash (v0.1.0 simple approach)
-	// Hash the key and take first 16 hex chars
-	hash := sha256.Sum256([]byte(apiKey))
-	orgID := "org-" + hex.EncodeToString(hash[:])[:12]
-
-	return orgID
 }
 
 // resolveBaseImagePath returns the path to the base image for the given runtime.

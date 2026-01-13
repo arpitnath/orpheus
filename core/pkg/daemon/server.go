@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"orpheus/daemon/pkg/auth"
 	"orpheus/daemon/pkg/execlog"
 	"orpheus/daemon/pkg/mcp"
 	"orpheus/daemon/pkg/registry"
@@ -30,10 +29,6 @@ type Server struct {
 	listeners  []net.Listener // Multiple listeners (Unix socket + TCP)
 	httpServer *http.Server
 	startTime  time.Time
-
-	// Authentication (for TCP endpoints)
-	authStore   *auth.Store
-	rateLimiter *auth.RateLimiter
 
 	// Agent registry (for discovery and env vars)
 	registry registry.Registry
@@ -80,33 +75,6 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 		listeners: make([]net.Listener, 0),
 		ctx:       ctx,
 		cancel:    cancel,
-	}
-
-	// Initialize auth if TCP is enabled
-	if config.TCP.Enabled {
-		// Determine database path
-		// Default: /var/lib/orpheus/keys.db or ~/.orpheus/keys.db
-		dbPath := "/var/lib/orpheus/keys.db"
-		if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
-			// Use home directory if /var/lib doesn't exist
-			home, _ := os.UserHomeDir()
-			dbPath = filepath.Join(home, ".orpheus", "keys.db")
-
-			// Ensure directory exists
-			os.MkdirAll(filepath.Dir(dbPath), 0755)
-		}
-
-		// Initialize auth store
-		store, err := auth.NewStore(dbPath)
-		if err != nil {
-			return nil, fmt.Errorf("init auth store: %w", err)
-		}
-		s.authStore = store
-
-		// Initialize rate limiter
-		s.rateLimiter = auth.NewRateLimiter()
-
-		log.Printf("Auth enabled: API keys database at %s", dbPath)
 	}
 
 	// Initialize agent registry
@@ -157,14 +125,12 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	mux.HandleFunc("/v1/execlog/stats", s.handleExecLogStats) // GET execution stats
 	mux.HandleFunc("/v1/execlog", s.handleExecLog)      // GET filtered execution logs
 
-	// Initialize MCP if TCP is enabled (MCP requires authenticated access)
-	if config.TCP.Enabled {
-		mcpGetter := NewDaemonServerGetter(s)
-		mcpManager := mcp.NewMCPServerManager(mcpGetter)
-		mcpHandler := mcp.NewMCPHandler(mcpManager, s.authStore, s.rateLimiter)
-		mux.Handle("/mcp/", mcpHandler)
-		log.Printf("MCP endpoints enabled at /mcp/")
-	}
+	// Initialize MCP endpoints
+	mcpGetter := NewDaemonServerGetter(s)
+	mcpManager := mcp.NewMCPServerManager(mcpGetter)
+	mcpHandler := mcp.NewMCPHandler(mcpManager)
+	mux.Handle("/mcp/", mcpHandler)
+	log.Printf("MCP endpoints enabled at /mcp/")
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
@@ -245,15 +211,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			log.Printf("WARNING: Consider enabling TLS or binding to 127.0.0.1 for local-only access")
 		}
 
-		// Serve TCP WITH auth middleware (network untrusted)
-		authHandler := auth.AuthMiddleware(s.authStore, s.rateLimiter)(s.httpServer.Handler)
+		// Serve TCP (no auth for OSS - same handler as Unix socket)
 		tcpServer := &http.Server{
-			Handler:      authHandler,
+			Handler:      s.httpServer.Handler,
 			ReadTimeout:  s.httpServer.ReadTimeout,
 			WriteTimeout: s.httpServer.WriteTimeout,
 		}
-
-		log.Printf("Auth enabled for TCP endpoints (Unix socket remains unauthenticated)")
 
 		go func() {
 			errChan <- tcpServer.Serve(listener)
