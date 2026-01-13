@@ -1,0 +1,6 @@
+name: test-workspace
+runtime: python3
+module: agent
+entrypoint: handler
+memory: 256
+timeout: 60

@@ -55,11 +55,24 @@ type ModelServer interface {
 	GetCommand() *exec.Cmd
 }
 
+// ServerMode indicates how ServiceManager should manage the model server
+type ServerMode string
+
+const (
+	// ServerModeManaged means ServiceManager controls the process lifecycle (start/stop/restart)
+	ServerModeManaged ServerMode = "managed"
+
+	// ServerModeExternal means model server runs externally (health checks only, no process management)
+	// Use this for: Mac/Lima setup (Ollama on host), remote Ollama clusters, user-managed servers
+	ServerModeExternal ServerMode = "external"
+)
+
 // ModelConfig specifies model server configuration
 type ModelConfig struct {
 	Name     string            // Model name (e.g., "mistral-7b")
-	Server   string            // Server type: "auto", "ollama", "vllm", "external"
-	BaseURL  string            // For external servers
+	Server   string            // Server type: "auto", "ollama", "vllm"
+	Mode     ServerMode        // Management mode: "managed" or "external" (auto-detected if empty)
+	Endpoint string            // External endpoint URL (required for external mode, auto-detected otherwise)
 	Options  map[string]string // Server-specific options
 }
 

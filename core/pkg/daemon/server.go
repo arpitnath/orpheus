@@ -128,8 +128,13 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	s.autoscaler = autoscaler
 	log.Printf("Autoscaler initialized (interval: 5s)")
 
-	// Initialize pool manager
-	poolManager := NewPoolManager(reg, autoscaler, execlogDir, ctx)
+	// Initialize service manager (model server management)
+	serviceManager := service.NewManager()
+	s.serviceManager = serviceManager
+	log.Printf("ServiceManager initialized (platform-aware model management)")
+
+	// Initialize pool manager (pass serviceManager for model server access)
+	poolManager := NewPoolManager(reg, autoscaler, execlogDir, serviceManager, ctx)
 	s.poolManager = poolManager
 	log.Printf("Pool manager initialized")
 
@@ -137,11 +142,6 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	retention := execlog.NewRetention(execlogDir, 30, 24*time.Hour)
 	s.retention = retention
 	log.Printf("ExecLog retention initialized (retention=30d, interval=24h)")
-
-	// Initialize service manager (model server management)
-	serviceManager := service.NewManager()
-	s.serviceManager = serviceManager
-	log.Printf("ServiceManager initialized (platform-aware model management)")
 
 	mux := http.NewServeMux()
 

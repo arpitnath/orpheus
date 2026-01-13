@@ -15,6 +15,7 @@ import (
 	"orpheus/daemon/pkg/execlog"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/scaling"
+	"orpheus/daemon/pkg/service"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,9 +40,10 @@ type AgentPool struct {
 // PoolManager manages autoscaling pools for all deployed agents.
 // It creates pools on-demand when agents are deployed via the registry.
 type PoolManager struct {
-	registry   registry.Registry
-	autoscaler *scaling.BasicAutoscaler
-	execlogDir string // ExecLog directory for logging
+	registry       registry.Registry
+	autoscaler     *scaling.BasicAutoscaler
+	execlogDir     string // ExecLog directory for logging
+	serviceManager *service.Manager // Model server management
 
 	pools map[string]*AgentPool // agentName → pool
 	mu    sync.RWMutex
@@ -52,12 +54,13 @@ type PoolManager struct {
 }
 
 // NewPoolManager creates a new pool manager.
-func NewPoolManager(registry registry.Registry, autoscaler *scaling.BasicAutoscaler, execlogDir string, ctx context.Context) *PoolManager {
+func NewPoolManager(registry registry.Registry, autoscaler *scaling.BasicAutoscaler, execlogDir string, serviceManager *service.Manager, ctx context.Context) *PoolManager {
 	ctx, cancel := context.WithCancel(ctx)
 	return &PoolManager{
-		execlogDir: execlogDir,
-		registry:   registry,
-		autoscaler: autoscaler,
+		execlogDir:     execlogDir,
+		registry:       registry,
+		autoscaler:     autoscaler,
+		serviceManager: serviceManager,
 		pools:      make(map[string]*AgentPool),
 		ctx:        ctx,
 		cancel:     cancel,
@@ -87,8 +90,8 @@ func (pm *PoolManager) CreatePool(agentName string) error {
 	// Create queue
 	queue := scaling.NewRequestQueue(agentName, queueSize)
 
-	// Create spawner
-	spawner := NewDaemonWorkerSpawner(agentName, agent.Path, agent.ResolvedEnv)
+	// Create spawner (pass serviceManager for model server access)
+	spawner := NewDaemonWorkerSpawner(agentName, agent.Path, agent.ResolvedEnv, pm.serviceManager)
 
 	// Create pool
 	pool := scaling.NewWorkerPool(agentName, spawner, policy)
@@ -586,18 +589,20 @@ func validateScalingConfig(policy scaling.ScalingPolicy, queueSize int) error {
 
 // DaemonWorkerSpawner creates workers that execute via daemon's Execute() function.
 type DaemonWorkerSpawner struct {
-	agentName   string
-	agentPath   string
-	resolvedEnv []string
-	counter     atomic.Int64
+	agentName      string
+	agentPath      string
+	resolvedEnv    []string
+	serviceManager *service.Manager // Model server management
+	counter        atomic.Int64
 }
 
 // NewDaemonWorkerSpawner creates a new spawner for daemon-based workers.
-func NewDaemonWorkerSpawner(agentName, agentPath string, resolvedEnv []string) *DaemonWorkerSpawner {
+func NewDaemonWorkerSpawner(agentName, agentPath string, resolvedEnv []string, serviceManager *service.Manager) *DaemonWorkerSpawner {
 	return &DaemonWorkerSpawner{
-		agentName:   agentName,
-		agentPath:   agentPath,
-		resolvedEnv: resolvedEnv,
+		agentName:      agentName,
+		agentPath:      agentPath,
+		resolvedEnv:    resolvedEnv,
+		serviceManager: serviceManager,
 	}
 }
 
@@ -607,12 +612,13 @@ func (s *DaemonWorkerSpawner) SpawnWorker(ctx context.Context, agentID string) (
 	count := s.counter.Add(1)
 	workerID := fmt.Sprintf("%s-worker-%d", agentID, count)
 
-	// Create worker
+	// Create worker (pass serviceManager for model server access)
 	worker := &DaemonWorker{
-		id:          workerID,
-		agentID:     agentID,
-		agentPath:   s.agentPath,
-		resolvedEnv: s.resolvedEnv,
+		id:             workerID,
+		agentID:        agentID,
+		agentPath:      s.agentPath,
+		resolvedEnv:    s.resolvedEnv,
+		serviceManager: s.serviceManager,
 	}
 
 	// Initialize state
@@ -634,10 +640,11 @@ func (s *DaemonWorkerSpawner) KillWorker(ctx context.Context, workerID string) e
 
 // DaemonWorker implements scaling.Worker by wrapping daemon's Execute() function.
 type DaemonWorker struct {
-	id          string
-	agentID     string
-	agentPath   string
-	resolvedEnv []string
+	id             string
+	agentID        string
+	agentPath      string
+	resolvedEnv    []string
+	serviceManager *service.Manager // Model server management
 
 	lastUsed            atomic.Int64 // Unix nano timestamp
 	idle                atomic.Bool  // Currently idle
@@ -723,8 +730,8 @@ func (w *DaemonWorker) Execute(ctx context.Context, input []byte) (*scaling.Resu
 		Env:       envMap,
 	}
 
-	// Execute using daemon's existing infrastructure
-	result, err := Execute(ctx, req)
+	// Execute using daemon's existing infrastructure (pass serviceManager for model server)
+	result, err := Execute(ctx, req, w.serviceManager)
 	if err != nil {
 		// Track failure
 		w.trackFailure()
@@ -806,8 +813,8 @@ func (w *DaemonWorker) ExecuteStreaming(ctx context.Context, input []byte, strea
 	// Create stream adapter: runtime.StreamWriter → chan *scaling.StreamEvent
 	streamWriter := newChannelStreamWriter(streamCh)
 
-	// Execute using daemon's ExecuteStreaming infrastructure
-	result, err := ExecuteStreaming(ctx, req, streamWriter)
+	// Execute using daemon's ExecuteStreaming infrastructure (pass serviceManager for model server)
+	result, err := ExecuteStreaming(ctx, req, streamWriter, w.serviceManager)
 	if err != nil {
 		// Track failure
 		w.trackFailure()

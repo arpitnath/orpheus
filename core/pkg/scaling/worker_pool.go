@@ -488,29 +488,24 @@ func (p *BasicWorkerPool) performMaintenance() {
 		}
 	}
 
-	// Scale down if needed (only remove idle workers past timeout)
+	// Scale down if needed - remove idle workers immediately when autoscaler decides
+	// Note: Autoscaler already has ScaleDownDelay to prevent thrashing, so we respect its decision
 	if current > desired {
 		toRemove := current - desired
 		log.Printf("[pool] %s: scaling down %d → %d (removing up to %d workers)",
 			p.agentID, current, desired, toRemove)
 
 		removed := 0
+	scaleDownLoop:
 		for i := 0; i < toRemove; i++ {
 			select {
 			case worker := <-p.idleWorkers:
-				if time.Since(worker.LastUsed()) > p.policy.IdleTimeout {
-					p.removeWorker(worker.ID())
-					removed++
-				} else {
-					// Return if not idle long enough
-					select {
-					case p.idleWorkers <- worker:
-					default:
-					}
-				}
+				// Remove idle worker immediately - autoscaler's ScaleDownDelay already prevents thrashing
+				p.removeWorker(worker.ID())
+				removed++
 			default:
-				// No more idle workers to check
-				break
+				// No more idle workers available to remove
+				break scaleDownLoop
 			}
 		}
 

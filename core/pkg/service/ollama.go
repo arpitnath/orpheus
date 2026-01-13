@@ -13,10 +13,11 @@ import (
 	"time"
 )
 
-// OllamaServer manages Ollama as a host process (macOS)
+// OllamaServer manages Ollama as a host process (macOS) or external server
 type OllamaServer struct {
 	modelName  string
 	endpoint   string
+	mode       ServerMode // managed or external
 	cmd        *exec.Cmd
 	state      ServerState
 	mu         sync.RWMutex
@@ -24,20 +25,52 @@ type OllamaServer struct {
 }
 
 // NewOllamaServer creates a new Ollama server manager
-func NewOllamaServer(modelName string) *OllamaServer {
+// mode: ServerModeManaged (process management) or ServerModeExternal (health checks only)
+// endpoint: URL of the Ollama server (e.g., "http://localhost:11434" or "http://host.lima.internal:11434")
+func NewOllamaServer(modelName string, mode ServerMode, endpoint string) *OllamaServer {
+	// Default endpoint based on mode
+	if endpoint == "" {
+		endpoint = "http://localhost:11434"
+	}
+
 	return &OllamaServer{
 		modelName:  modelName,
-		endpoint:   "http://localhost:11434",
+		endpoint:   endpoint,
+		mode:       mode,
 		state:      StateStopped,
 		httpClient: &http.Client{Timeout: 2 * time.Second},
 	}
 }
 
-// Start starts the Ollama server process
+// Mode returns the server management mode
+func (o *OllamaServer) Mode() ServerMode {
+	return o.mode
+}
+
+// Start starts the Ollama server process (managed mode) or verifies it's reachable (external mode)
 func (o *OllamaServer) Start(ctx context.Context) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	// External mode: Just verify server is reachable, don't try to start process
+	if o.mode == ServerModeExternal {
+		log.Printf("[ollama] External mode - verifying server at %s", o.endpoint)
+		o.state = StateStarting
+
+		if healthy, err := o.Health(ctx); !healthy {
+			o.state = StateStopped
+			if err != nil {
+				return fmt.Errorf("external Ollama server not reachable at %s: %w", o.endpoint, err)
+			}
+			return fmt.Errorf("external Ollama server not reachable at %s", o.endpoint)
+		}
+
+		o.state = StateReady
+		log.Printf("[ollama] External server verified at %s", o.endpoint)
+		return nil
+	}
+
+	// Managed mode: Start the process if not already running
 	if o.isRunning() {
 		log.Printf("[ollama] Server already running at %s", o.endpoint)
 		o.state = StateReady
@@ -78,11 +111,18 @@ func (o *OllamaServer) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the Ollama server
+// Stop stops the Ollama server (managed mode only - external mode does nothing)
 func (o *OllamaServer) Stop(ctx context.Context) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	// External mode: Don't stop external servers
+	if o.mode == ServerModeExternal {
+		log.Printf("[ollama] External mode - not stopping external server")
+		return nil
+	}
+
+	// Managed mode: Stop the process
 	if o.cmd == nil || o.cmd.Process == nil {
 		return nil
 	}

@@ -1,0 +1,6 @@
+name: test-memory-oom
+runtime: python3
+module: agent
+entrypoint: handler
+memory: 256  # 256MB limit (enforced by OCI runtime)
+timeout: 180

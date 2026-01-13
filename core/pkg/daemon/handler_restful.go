@@ -221,6 +221,31 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 		return
 	}
 
+	// Generate request ID for execlog tracking
+	requestID := uuid.New().String()
+
+	// Helper to log execlog events (best-effort, non-blocking for QUEUED)
+	logExecEvent := func(state string, durationMs *int64, errMsg *string) {
+		writer, err := execlog.NewWriter(s.execlogDir, agent.Name)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		event := &execlog.Event{
+			Timestamp:  time.Now(),
+			RequestID:  requestID,
+			State:      state,
+			DurationMs: durationMs,
+			Error:      errMsg,
+		}
+		if err := writer.Log(event); err != nil {
+			log.Printf("Warning: Failed to log %s: %v", state, err)
+		}
+	}
+
+	// Log QUEUED state (async, best-effort)
+	go logExecEvent(execlog.StateQueued, nil, nil)
+
 	// Build full RunRequest using stored agent metadata
 	fullReq := &RunRequest{
 		AgentPath: agent.Path,
@@ -246,17 +271,32 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 		fullReq.Env[k] = v
 	}
 
-	// Execute using existing flow
+	// Log STARTED state and track execution time
+	logExecEvent(execlog.StateStarted, nil, nil)
+	startTime := time.Now()
+
+	// Execute using existing flow (pass ServiceManager for model server management)
 	ctx := r.Context()
-	result, err := Execute(ctx, fullReq)
+	result, err := Execute(ctx, fullReq, s.serviceManager)
+
+	// Calculate duration
+	durationMs := time.Since(startTime).Milliseconds()
+
 	if err != nil {
+		// Log FAILED state
+		errStr := err.Error()
+		logExecEvent(execlog.StateFailed, &durationMs, &errStr)
+
 		writeJSON(w, http.StatusOK, RunResponse{
 			Status:     "error",
 			Error:      err.Error(),
-			DurationMs: 0,
+			DurationMs: durationMs,
 		})
 		return
 	}
+
+	// Log COMPLETED state
+	logExecEvent(execlog.StateCompleted, &durationMs, nil)
 
 	// Convert proxy.Result to RunResponse
 	resp := RunResponse{
@@ -463,8 +503,8 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		fullReq.Env[k] = v
 	}
 
-	// Execute agent with streaming
-	result, err := ExecuteStreaming(ctx, fullReq, sseWriter)
+	// Execute agent with streaming (pass ServiceManager for model server management)
+	result, err := ExecuteStreaming(ctx, fullReq, sseWriter, s.serviceManager)
 
 	// Send error event if execution failed
 	if err != nil {

@@ -13,22 +13,22 @@ import (
 	"orpheus/daemon/pkg/generator"
 	"orpheus/daemon/pkg/proxy"
 	"orpheus/daemon/pkg/runtime"
+	"orpheus/daemon/pkg/service"
 )
 
 // Execute runs an agent using the existing proxy.RunAgent infrastructure.
 // This is the bridge between the daemon API and the execution engine.
-func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
+// serviceManager is optional - pass nil for agents that don't need model servers.
+func Execute(ctx context.Context, req *RunRequest, serviceManager *service.Manager) (*proxy.Result, error) {
 	// Load agent config
 	cfg, err := config.Load(req.AgentPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	// NEW: If agent specifies a model, inject model server endpoint
-	// POC: Ollama on Mac host, containers in Lima reach via host.lima.internal
-	// Only inject if not already set by user in agent.yaml
+	// If agent specifies a model, use ServiceManager to ensure model server is running
 	if cfg.Model != "" {
-		// Check if user already set OPENAI_BASE_URL
+		// Check if user already set OPENAI_BASE_URL (user's env takes priority)
 		hasBaseURL := false
 		hasAPIKey := false
 		for _, env := range cfg.Env {
@@ -40,9 +40,23 @@ func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
 			}
 		}
 
-		// Only inject if not user-provided (user's env takes priority)
-		modelEndpoint := "http://host.lima.internal:11434"
+		// Only inject if not user-provided
 		if !hasBaseURL {
+			// ServiceManager is required for model server management
+			if serviceManager == nil {
+				return nil, fmt.Errorf("agent requires model '%s' but ServiceManager is not available", cfg.Model)
+			}
+
+			modelConfig := service.ModelConfig{
+				Name:   cfg.Model,
+				Server: "auto", // Auto-detect backend (Ollama on Mac, vLLM on Linux+GPU)
+			}
+			modelEndpoint, err := serviceManager.EnsureModelServer(ctx, modelConfig)
+			if err != nil {
+				return nil, fmt.Errorf("failed to ensure model server for '%s': %w", cfg.Model, err)
+			}
+
+			log.Printf("[executor] ServiceManager provided endpoint: %s", modelEndpoint)
 			cfg.Env = append(cfg.Env,
 				"MODEL_URL="+modelEndpoint,
 				"OPENAI_BASE_URL="+modelEndpoint+"/v1",
@@ -54,7 +68,7 @@ func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
 			)
 		}
 
-		log.Printf("[executor] Agent uses model '%s', endpoint: %s", cfg.Model, modelEndpoint)
+		log.Printf("[executor] Agent uses model '%s'", cfg.Model)
 	}
 
 	// Merge runtime environment variable overrides (after auto-injection)
@@ -110,7 +124,8 @@ func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
 
 // ExecuteStreaming runs an agent with real-time SSE output streaming.
 // Similar to Execute() but passes streamWriter for real-time event emission.
-func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime.StreamWriter) (*proxy.Result, error) {
+// serviceManager is optional - pass nil for agents that don't need model servers.
+func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime.StreamWriter, serviceManager *service.Manager) (*proxy.Result, error) {
 	// Load agent config
 	cfg, err := config.Load(req.AgentPath)
 	if err != nil {
@@ -124,16 +139,49 @@ func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime
 		}
 	}
 
-	// NEW: If agent specifies a model, inject model server endpoint
-	// For POC: Assume Ollama at localhost:11434 if model field exists
+	// If agent specifies a model, use ServiceManager to ensure model server is running
 	if cfg.Model != "" {
-		modelEndpoint := "http://localhost:11434"
-		cfg.Env = append(cfg.Env,
-			"MODEL_URL="+modelEndpoint,
-			"OPENAI_BASE_URL="+modelEndpoint+"/v1",
-			"OPENAI_API_KEY=orpheus-internal-key",
-		)
-		log.Printf("[executor] Agent uses model '%s', injecting endpoint: %s", cfg.Model, modelEndpoint)
+		// Check if user already set OPENAI_BASE_URL (user's env takes priority)
+		hasBaseURL := false
+		hasAPIKey := false
+		for _, env := range cfg.Env {
+			if len(env) > 16 && env[:16] == "OPENAI_BASE_URL=" {
+				hasBaseURL = true
+			}
+			if len(env) > 15 && env[:15] == "OPENAI_API_KEY=" {
+				hasAPIKey = true
+			}
+		}
+
+		// Only inject if not user-provided
+		if !hasBaseURL {
+			// ServiceManager is required for model server management
+			if serviceManager == nil {
+				return nil, fmt.Errorf("agent requires model '%s' but ServiceManager is not available", cfg.Model)
+			}
+
+			modelConfig := service.ModelConfig{
+				Name:   cfg.Model,
+				Server: "auto", // Auto-detect backend
+			}
+			modelEndpoint, err := serviceManager.EnsureModelServer(ctx, modelConfig)
+			if err != nil {
+				return nil, fmt.Errorf("failed to ensure model server for '%s': %w", cfg.Model, err)
+			}
+
+			log.Printf("[executor] ServiceManager provided endpoint: %s", modelEndpoint)
+			cfg.Env = append(cfg.Env,
+				"MODEL_URL="+modelEndpoint,
+				"OPENAI_BASE_URL="+modelEndpoint+"/v1",
+			)
+		}
+		if !hasAPIKey {
+			cfg.Env = append(cfg.Env,
+				"OPENAI_API_KEY=orpheus-internal-key",
+			)
+		}
+
+		log.Printf("[executor] Agent uses model '%s'", cfg.Model)
 	}
 
 	// Generate entrypoint

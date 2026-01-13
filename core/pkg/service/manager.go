@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"sync"
@@ -289,6 +291,16 @@ func (m *Manager) waitForState(targetState ServerState, ctx context.Context) err
 
 // EnsureModelServer ensures a model server is running for the given config
 func (m *Manager) EnsureModelServer(ctx context.Context, config ModelConfig) (string, error) {
+	// Initialize backend if not already done (lazy initialization)
+	if m.backend == nil {
+		server, err := m.createServer(config)
+		if err != nil {
+			return "", fmt.Errorf("create server: %w", err)
+		}
+		m.backend = server
+		log.Printf("[service-manager] Backend initialized: %s for model '%s'", config.Server, config.Name)
+	}
+
 	resp := make(chan error, 1)
 
 	m.commands <- Command{
@@ -303,36 +315,98 @@ func (m *Manager) EnsureModelServer(ctx context.Context, config ModelConfig) (st
 			return "", err
 		}
 
-		if m.backend != nil {
-			return m.backend.Endpoint(), nil
-		}
-
-		return "", fmt.Errorf("backend not initialized")
+		return m.backend.Endpoint(), nil
 
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
 }
 
-// createServer creates the appropriate server based on platform
+// createServer creates the appropriate server based on platform and environment
 func (m *Manager) createServer(config ModelConfig) (ModelServer, error) {
-	// Auto-detect if not specified
+	// Auto-detect server type if not specified
 	serverType := config.Server
 	if serverType == "" || serverType == "auto" {
 		serverType = m.detectServerType()
 	}
 
+	// Auto-detect mode and endpoint if not specified
+	mode := config.Mode
+	endpoint := config.Endpoint
+
+	if mode == "" {
+		mode, endpoint = m.detectModeAndEndpoint()
+	}
+
+	log.Printf("[service-manager] Creating server: type=%s, mode=%s, endpoint=%s", serverType, mode, endpoint)
+
 	switch serverType {
 	case "ollama":
-		return NewOllamaServer(config.Name), nil
+		return NewOllamaServer(config.Name, mode, endpoint), nil
 
 	// TODO: Add vLLM for Linux
 	// case "vllm":
-	//     return NewVLLMServer(config.Name), nil
+	//     return NewVLLMServer(config.Name, mode, endpoint), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported server type: %s", serverType)
 	}
+}
+
+// detectModeAndEndpoint auto-detects the management mode and endpoint based on environment
+func (m *Manager) detectModeAndEndpoint() (ServerMode, string) {
+	// Check if running in Lima VM (indicates Ollama is on Mac host)
+	if isRunningInLima() {
+		// Lima VM: Ollama runs on Mac host, use external mode
+		log.Printf("[service-manager] Detected Lima VM - using external mode with host.lima.internal")
+		return ServerModeExternal, "http://host.lima.internal:11434"
+	}
+
+	// Check if Ollama is already running locally (another process started it)
+	if isOllamaRunningLocally() {
+		// Ollama already running locally - could be external or we manage it
+		// Default to external to avoid conflicts
+		log.Printf("[service-manager] Detected Ollama already running - using external mode")
+		return ServerModeExternal, "http://localhost:11434"
+	}
+
+	// Default: managed mode on localhost
+	log.Printf("[service-manager] Using managed mode on localhost")
+	return ServerModeManaged, "http://localhost:11434"
+}
+
+// isRunningInLima checks if we're running inside a Lima VM
+func isRunningInLima() bool {
+	// Lima VMs have specific characteristics:
+	// 1. /proc/version contains "lima" or similar
+	// 2. host.lima.internal is resolvable
+	// 3. /.lima-* files exist
+
+	// Check for Lima-specific socket/mount
+	if _, err := os.Stat("/.lima-ssh"); err == nil {
+		return true
+	}
+
+	// Check if host.lima.internal is resolvable (Lima's host resolution)
+	// We do a quick TCP check rather than DNS since it's more reliable
+	conn, err := net.DialTimeout("tcp", "host.lima.internal:11434", 500*time.Millisecond)
+	if err == nil {
+		conn.Close()
+		return true // If we can connect, we're in Lima and Ollama is on host
+	}
+
+	return false
+}
+
+// isOllamaRunningLocally checks if Ollama is already running on localhost
+func isOllamaRunningLocally() bool {
+	client := &http.Client{Timeout: 1 * time.Second}
+	resp, err := client.Get("http://localhost:11434/api/tags")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == 200
 }
 
 // detectServerType auto-detects the best server for current platform

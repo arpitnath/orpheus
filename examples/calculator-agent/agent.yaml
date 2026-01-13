@@ -5,3 +5,18 @@ entrypoint: handler
 memory: 256
 timeout: 180  # 3 minutes max timeout
 # idle_timeout disabled for VM (VM doesn't stream output)
+
+# Environment variables
+env:
+  - OPENAI_API_KEY=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
+
+# Scaling configuration for autoscaling testing (Phase 7)
+scaling:
+  min_workers: 1
+  max_workers: 3
+  target_utilization: 1.5
+  scale_up_threshold: 2.0
+  scale_down_threshold: 0.3
+  scale_up_delay: "10s"
+  scale_down_delay: "30s"
+  queue_size: 10
