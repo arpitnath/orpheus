@@ -8,15 +8,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"orpheus/daemon/pkg/execlog"
+	"orpheus/daemon/pkg/proxy"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/runtime"
 	"orpheus/daemon/pkg/scaling"
+
 	"github.com/google/uuid"
-	"strconv"
 )
 
 // handleAgentResource routes RESTful agent requests based on path.
@@ -282,14 +284,21 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 	// Calculate duration
 	durationMs := time.Since(startTime).Milliseconds()
 
-	if err != nil {
+	// Log COMPLETED or FAILED state
+	// Check both err != nil AND result.Status != success to catch OOM/timeout
+	if err != nil || result.Status != proxy.StatusSuccess {
 		// Log FAILED state
-		errStr := err.Error()
+		var errStr string
+		if err != nil {
+			errStr = err.Error()
+		} else if result.Error != "" {
+			errStr = result.Error
+		}
 		logExecEvent(execlog.StateFailed, &durationMs, &errStr)
 
 		writeJSON(w, http.StatusOK, RunResponse{
 			Status:     "error",
-			Error:      err.Error(),
+			Error:      errStr,
 			DurationMs: durationMs,
 		})
 		return
@@ -557,16 +566,22 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 	durationMs := time.Since(startTime).Milliseconds()
 
 	// Send error event if execution failed
-	if err != nil {
+	// Check both err != nil AND result.Status != success to catch OOM/timeout
+	if err != nil || result.Status != proxy.StatusSuccess {
 		// Log FAILED state
-		errStr := err.Error()
+		var errStr string
+		if err != nil {
+			errStr = err.Error()
+		} else if result.Error != "" {
+			errStr = result.Error
+		}
 		logExecEvent(execlog.StateFailed, &durationMs, &errStr)
 
 		sseWriter.WriteEvent(&runtime.StreamEvent{
 			Type:      "error",
 			Timestamp: time.Now(),
 			Data: map[string]interface{}{
-				"error":       err.Error(),
+				"error":       errStr,
 				"duration_ms": time.Since(runningAgent.StartedAt).Milliseconds(),
 			},
 		})

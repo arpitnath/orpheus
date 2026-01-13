@@ -259,13 +259,20 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 	agentPool.pool.ReturnWorker(worker)
 
 	// Log COMPLETED or FAILED state (best-effort, async)
-	if err != nil {
+	// Check both err != nil AND result.Status != "success" to catch OOM/timeout
+	if err != nil || (result != nil && result.Status != "success") {
+		var errPtr *string
+		if err != nil {
+			errPtr = ptrString(err.Error())
+		} else if result != nil && result.Error != "" {
+			errPtr = ptrString(result.Error)
+		}
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
 			RequestID:  req.ID,
 			State:      execlog.StateFailed,
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
-			Error:      ptrString(err.Error()),
+			Error:      errPtr,
 		})
 	} else {
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
@@ -302,13 +309,20 @@ func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.
 	agentPool.pool.ReturnWorker(worker)
 
 	// Log COMPLETED or FAILED state (best-effort, async)
-	if err != nil {
+	// Check both err != nil AND result.Status != "success" to catch OOM/timeout
+	if err != nil || (result != nil && result.Status != "success") {
+		var errPtr *string
+		if err != nil {
+			errPtr = ptrString(err.Error())
+		} else if result != nil && result.Error != "" {
+			errPtr = ptrString(result.Error)
+		}
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
 			RequestID:  req.ID,
 			State:      execlog.StateFailed,
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
-			Error:      ptrString(err.Error()),
+			Error:      errPtr,
 		})
 	} else {
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
