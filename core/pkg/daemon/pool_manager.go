@@ -258,6 +258,24 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 	// Return worker to pool
 	agentPool.pool.ReturnWorker(worker)
 
+	// Log COMPLETED or FAILED state (best-effort, async)
+	if err != nil {
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateFailed,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+			Error:      ptrString(err.Error()),
+		})
+	} else {
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateCompleted,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+		})
+	}
+
 	// Send final response
 	req.ResponseCh <- &scaling.Response{
 		Result:   result,

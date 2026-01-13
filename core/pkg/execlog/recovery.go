@@ -73,7 +73,8 @@ func DetectAndMarkCrashed(execlogDir string) (map[string][]*CrashedRequest, erro
 			req.AgentName = agentName
 		}
 
-		writer.Close()
+		// NOTE: Don't close the writer - it's cached and will be reused by other code
+		// The writer is designed to persist across the daemon's lifetime
 
 		allCrashed[agentName] = crashed
 	}

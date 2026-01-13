@@ -358,6 +358,24 @@ func (s *Server) executeViaPoolStreaming(w http.ResponseWriter, r *http.Request,
 		SessionID:  sessionID,   // Session affinity (Phase 2)
 	}
 
+	// Log QUEUED state (best-effort, async)
+	go func() {
+		writer, err := execlog.NewWriter(s.execlogDir, agentName)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		err = writer.Log(&execlog.Event{
+			Timestamp: time.Now(),
+			RequestID: scalingReq.ID,
+			State:     execlog.StateQueued,
+			SessionID: ptrOrNil(scalingReq.SessionID),
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to log QUEUED: %v", err)
+		}
+	}()
+
 	// Enqueue request
 	if err := pool.queue.Enqueue(r.Context(), scalingReq); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "queue full")
@@ -430,6 +448,31 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Generate request ID for execlog tracking
+	requestID := uuid.New().String()
+
+	// Helper to log execlog events (best-effort)
+	logExecEvent := func(state string, durationMs *int64, errMsg *string) {
+		writer, err := execlog.NewWriter(s.execlogDir, agent.Name)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		event := &execlog.Event{
+			Timestamp:  time.Now(),
+			RequestID:  requestID,
+			State:      state,
+			DurationMs: durationMs,
+			Error:      errMsg,
+		}
+		if err := writer.Log(event); err != nil {
+			log.Printf("Warning: Failed to log %s: %v", state, err)
+		}
+	}
+
+	// Log QUEUED state (async, best-effort)
+	go logExecEvent(execlog.StateQueued, nil, nil)
+
 	// Create SSE writer and verify streaming is supported
 	sseWriter := runtime.NewSSEWriter(w)
 	if sseWriter == nil {
@@ -444,7 +487,7 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
 
-	// Generate agent ID
+	// Generate agent ID (for running agent tracking, separate from request ID)
 	agentID := fmt.Sprintf("agent-%s", uuid.New().String()[:8])
 
 	// Send init event
@@ -503,11 +546,22 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		fullReq.Env[k] = v
 	}
 
+	// Log STARTED state and track execution time
+	logExecEvent(execlog.StateStarted, nil, nil)
+	startTime := time.Now()
+
 	// Execute agent with streaming (pass ServiceManager for model server management)
 	result, err := ExecuteStreaming(ctx, fullReq, sseWriter, s.serviceManager)
 
+	// Calculate duration
+	durationMs := time.Since(startTime).Milliseconds()
+
 	// Send error event if execution failed
 	if err != nil {
+		// Log FAILED state
+		errStr := err.Error()
+		logExecEvent(execlog.StateFailed, &durationMs, &errStr)
+
 		sseWriter.WriteEvent(&runtime.StreamEvent{
 			Type:      "error",
 			Timestamp: time.Now(),
@@ -526,6 +580,9 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
+
+	// Log COMPLETED state
+	logExecEvent(execlog.StateCompleted, &durationMs, nil)
 
 	// Send completed event with final result
 	sseWriter.WriteEvent(&runtime.StreamEvent{
