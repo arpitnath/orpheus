@@ -70,9 +70,6 @@ async function makeRequest<T>(
         method,
         headers: {
           'Content-Type': 'application/json',
-          ...(serverConfig.auth_key && {
-            Authorization: `Bearer ${serverConfig.auth_key}`,
-          }),
         },
         timeout,
         agent: false, // Disable connection pooling to prevent header issues

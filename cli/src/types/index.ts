@@ -3,12 +3,6 @@ export interface ServerConfig {
   mode: 'unix_socket' | 'tcp';
   socket_path?: string;
   url?: string;
-  auth_key?: string;
-}
-
-export interface CLIConfig {
-  active: string;
-  servers: Record<string, ServerConfig>;
 }
 
 //@AGENT_TYPES

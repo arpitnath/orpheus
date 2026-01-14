@@ -133,9 +133,6 @@ export async function uploadAgent(
         headers: {
           'Content-Type': `multipart/form-data; boundary=${boundary}`,
           'Content-Length': body.length,
-          ...(serverConfig.auth_key && {
-            Authorization: `Bearer ${serverConfig.auth_key}`,
-          }),
         },
       };
       requestFn = isHttps ? httpsRequest : httpRequest;
@@ -279,9 +276,6 @@ export async function uploadAgentWithSSE(
           'Content-Type': `multipart/form-data; boundary=${boundary}`,
           'Content-Length': body.length,
           'Accept': 'text/event-stream',
-          ...(serverConfig.auth_key && {
-            Authorization: `Bearer ${serverConfig.auth_key}`,
-          }),
         },
       };
       requestFn = isHttps ? httpsRequest : httpRequest;

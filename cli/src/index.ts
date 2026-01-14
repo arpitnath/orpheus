@@ -3,12 +3,7 @@
 import React from 'react';
 import { Command } from 'commander';
 import { createClient, testConnection, getHealth, getStats } from './lib/api.js';
-import {
-  getActiveServer,
-  addServer,
-  removeServer,
-  setActiveServer,
-} from './lib/config.js';
+import { getActiveServer } from './lib/config.js';
 import {
   createTarball,
   calculateChecksum,
@@ -35,8 +30,7 @@ import { AgentInspect } from './components/inspect/index.js';
 import { PoolStats } from './components/PoolStats.js';
 import { HealthCheck } from './components/HealthCheck.js';
 import { Validate } from './components/Validate.js';
-import { LoginList } from './components/LoginList.js';
-import { c, ok, label } from './lib/format.js';
+import { c, label } from './lib/format.js';
 
 //@VERSION
 const VERSION = '0.1.0';
@@ -472,60 +466,6 @@ program
       if (error.stdout) console.log(error.stdout);
       if (error.stderr) console.error(error.stderr);
       console.error(`\x1b[31mError:\x1b[0m ${error.message || 'Command failed'}`);
-      process.exit(1);
-    }
-  });
-
-//@LOGIN_COMMANDS
-const loginCommand = program.command('login').description('Manage server connections');
-
-loginCommand
-  .command('list', { isDefault: true })
-  .description('List configured servers')
-  .action(async () => {
-    renderApp(React.createElement(LoginList));
-  });
-
-loginCommand
-  .command('add <name> <url>')
-  .description('Add a new server')
-  .option('-k, --key <key>', 'API key for authentication')
-  .action(async (name: string, url: string, options: { key?: string }) => {
-    try {
-      addServer(name, url, options.key);
-      console.log(ok(`Added server: ${name}`));
-      console.log(`  ${label('URL', url)}`);
-      if (options.key) {
-        console.log(`  ${label('Auth', 'configured')}`);
-      }
-    } catch (err) {
-      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
-  });
-
-loginCommand
-  .command('use <name>')
-  .description('Set active server')
-  .action(async (name: string) => {
-    try {
-      setActiveServer(name);
-      console.log(ok(`Active server set to: ${name}`));
-    } catch (err) {
-      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
-  });
-
-loginCommand
-  .command('remove <name>')
-  .description('Remove a server')
-  .action(async (name: string) => {
-    try {
-      removeServer(name);
-      console.log(ok(`Removed server: ${name}`));
-    } catch (err) {
-      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
   });
