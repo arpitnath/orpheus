@@ -5,6 +5,12 @@ export interface ServerConfig {
   url?: string;
 }
 
+// Config file structure (~/.orpheus/config.yaml)
+export interface OrpheusConfigFile {
+  active?: string;  // Name of active server
+  servers?: Record<string, ServerConfig>;
+}
+
 //@AGENT_TYPES
 export interface ScalingConfig {
   min_workers: number;

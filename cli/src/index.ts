@@ -3,7 +3,7 @@
 import React from 'react';
 import { Command } from 'commander';
 import { createClient, testConnection, getHealth, getStats } from './lib/api.js';
-import { getActiveServer } from './lib/config.js';
+import { getActiveServer, getActiveServerName, saveServer, loadConfig, getConfigFilePath } from './lib/config.js';
 import {
   createTarball,
   calculateChecksum,
@@ -44,6 +44,124 @@ program
   .version(VERSION, '-v, --version', 'Show version number');
 
 //@CORE_COMMANDS
+
+//@CONNECT_COMMANDS
+program
+  .command('connect <url>')
+  .description('Connect to a remote Orpheus server')
+  .option('-n, --name <name>', 'Name for the connection (default: derived from URL)')
+  .option('--no-test', 'Skip connection test')
+  .action(async (url: string, options: { name?: string; test?: boolean }) => {
+    try {
+      let normalizedUrl = url;
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        normalizedUrl = `http://${url}`;
+      }
+
+      const parsedUrl = new URL(normalizedUrl);
+      const name = options.name || parsedUrl.hostname.replace(/\./g, '-');
+
+      if (options.test !== false) {
+        process.stdout.write(`${c.dim}Testing connection to ${normalizedUrl}...${c.reset}`);
+
+        const originalUrl = process.env.ORPHEUS_URL;
+        process.env.ORPHEUS_URL = normalizedUrl;
+        const connected = await testConnection();
+        process.env.ORPHEUS_URL = originalUrl;
+
+        if (connected) {
+          console.log(` ${c.green}OK${c.reset}`);
+        } else {
+          console.log(` ${c.red}FAILED${c.reset}`);
+          console.error(`\n${c.red}Error:${c.reset} Could not connect to ${normalizedUrl}`);
+          console.error(`${c.dim}Make sure the daemon is running and accessible.${c.reset}`);
+          process.exit(1);
+        }
+      }
+
+      saveServer(name, {
+        mode: 'tcp',
+        url: normalizedUrl,
+      });
+
+      console.log(`\n${c.green}✓${c.reset} Connected to ${c.cyan}${normalizedUrl}${c.reset}`);
+      console.log(`  ${c.dim}Connection saved as '${name}' in ${getConfigFilePath()}${c.reset}`);
+      console.log(`\n${c.dim}Now you can use: orpheus status, orpheus list, orpheus deploy, etc.${c.reset}`);
+    } catch (err) {
+      console.error(`${c.red}Error:${c.reset} ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('disconnect')
+  .description('Disconnect from remote server (use local daemon)')
+  .action(async () => {
+    const config = loadConfig();
+    const currentServer = getActiveServerName();
+
+    if (currentServer === 'local' && !config.active) {
+      console.log(`${c.dim}Already using local daemon.${c.reset}`);
+      return;
+    }
+
+    saveServer('local', {
+      mode: 'unix_socket',
+    });
+
+    console.log(`${c.green}✓${c.reset} Disconnected from '${currentServer}'`);
+    console.log(`  ${c.dim}Now using local daemon.${c.reset}`);
+  });
+
+program
+  .command('connection')
+  .description('Show current connection info')
+  .action(async () => {
+    const serverName = getActiveServerName();
+    const server = getActiveServer();
+    const config = loadConfig();
+
+    console.log(`\n${c.bold}Current Connection${c.reset}\n`);
+
+    if (process.env.ORPHEUS_URL) {
+      console.log(`  ${c.dim}Source:${c.reset} ORPHEUS_URL environment variable`);
+      console.log(`  ${c.dim}URL:${c.reset}    ${c.cyan}${process.env.ORPHEUS_URL}${c.reset}`);
+    } else if (server.mode === 'tcp') {
+      console.log(`  ${c.dim}Name:${c.reset}   ${serverName}`);
+      console.log(`  ${c.dim}Mode:${c.reset}   TCP`);
+      console.log(`  ${c.dim}URL:${c.reset}    ${c.cyan}${server.url}${c.reset}`);
+    } else {
+      console.log(`  ${c.dim}Name:${c.reset}   ${serverName}`);
+      console.log(`  ${c.dim}Mode:${c.reset}   Unix Socket`);
+      console.log(`  ${c.dim}Path:${c.reset}   ${server.socket_path || 'default'}`);
+    }
+
+    process.stdout.write(`  ${c.dim}Status:${c.reset} `);
+    const connected = await testConnection();
+    if (connected) {
+      const health = await getHealth();
+      console.log(`${c.green}Connected${c.reset}`);
+      if (health) {
+        console.log(`  ${c.dim}Uptime:${c.reset} ${formatUptime(health.uptime_seconds)}`);
+      }
+    } else {
+      console.log(`${c.red}Not connected${c.reset}`);
+    }
+
+    if (config.servers && Object.keys(config.servers).length > 0) {
+      console.log(`\n${c.bold}Saved Connections${c.reset}\n`);
+      for (const [name, srv] of Object.entries(config.servers)) {
+        const active = name === config.active ? ` ${c.green}(active)${c.reset}` : '';
+        if (srv.mode === 'tcp') {
+          console.log(`  ${name}: ${srv.url}${active}`);
+        } else {
+          console.log(`  ${name}: ${srv.socket_path || 'unix socket'}${active}`);
+        }
+      }
+    }
+
+    console.log(`\n${c.dim}Config file: ${getConfigFilePath()}${c.reset}\n`);
+  });
 
 program
   .command('status')
