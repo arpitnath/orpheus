@@ -1,6 +1,0 @@
-name: test-long-runner
-runtime: python3
-module: agent
-entrypoint: handler
-memory: 256
-timeout: 600  # 10 minutes max

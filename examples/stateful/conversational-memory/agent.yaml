@@ -1,0 +1,24 @@
+name: conversational-memory
+runtime: python3
+module: agent
+entrypoint: handler
+
+memory: 512
+timeout: 120
+
+# Use Ollama via ServiceManager (fully self-contained)
+model: mistral
+
+env:
+  - WORKSPACE_DIR=/workspace
+
+# Session affinity CRITICAL for this agent
+session:
+  enabled: true
+  key: "X-Session-ID"
+  ttl: "2h"
+  wait_timeout: "200ms"
+
+scaling:
+  min_workers: 1
+  max_workers: 5

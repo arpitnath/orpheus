@@ -1,0 +1,21 @@
+name: embedding-cache
+runtime: python3
+module: agent
+entrypoint: handler
+
+memory: 512  # CONFIGURABLE for different OOM tests
+timeout: 300
+
+# ServiceManager integration (use local Mistral)
+model: mistral
+
+env:
+  - COLLECTIONS_DIR=/agent/data/collections
+  - MAX_COLLECTIONS=2
+
+scaling:
+  min_workers: 1
+  max_workers: 5
+  target_utilization: 1.5
+  scale_up_threshold: 2.0
+  scale_down_threshold: 0.3
