@@ -18,6 +18,7 @@ import (
 	"orpheus/daemon/pkg/execlog"
 	"orpheus/daemon/pkg/mcp"
 	"orpheus/daemon/pkg/registry"
+	"orpheus/daemon/pkg/runtime/downloader"
 	"orpheus/daemon/pkg/scaling"
 	"orpheus/daemon/pkg/service"
 )
@@ -39,6 +40,9 @@ type Server struct {
 
 	// Model server management (ServiceManager)
 	serviceManager *service.Manager
+
+	// Runtime downloader (for Python/Node base images)
+	downloader *downloader.Downloader
 
 	// Autoscaling (NEW - integrates pkg/scaling)
 	poolManager *PoolManager
@@ -100,6 +104,17 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	serviceManager := service.NewManager()
 	s.serviceManager = serviceManager
 	log.Printf("ServiceManager initialized (platform-aware model management)")
+
+	// Initialize runtime downloader
+	runtimeCacheDir := "/var/lib/orpheus/runtimes"
+	if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
+		home, _ := os.UserHomeDir()
+		runtimeCacheDir = filepath.Join(home, ".orpheus", "runtimes")
+	}
+	s.downloader = downloader.New(downloader.Config{
+		CacheDir: runtimeCacheDir,
+	})
+	log.Printf("Runtime downloader initialized (cache: %s)", runtimeCacheDir)
 
 	// Initialize pool manager (pass serviceManager for model server access)
 	poolManager := NewPoolManager(reg, autoscaler, execlogDir, serviceManager, ctx)

@@ -1,0 +1,41 @@
+[Unit]
+Description=Orpheus Daemon - Infrastructure for AI Agents
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Binary location
+ExecStart=/usr/local/bin/orpheusd --tcp-bind 0.0.0.0:7777
+
+# Restart policy
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# Environment
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# Working directory
+WorkingDirectory=/var/lib/orpheus
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orpheusd
+
+# Security hardening (optional, can be adjusted)
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=false
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=65535
+
+[Install]
+WantedBy=multi-user.target

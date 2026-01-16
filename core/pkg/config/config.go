@@ -52,7 +52,8 @@ type AgentConfig struct {
 	Session SessionConfig `yaml:"session,omitempty"`
 
 	// Model configuration (NEW - ServiceManager)
-	Model string `yaml:"model,omitempty"` // Model name (e.g., "mistral-7b", "openai:gpt-4")
+	Model  string `yaml:"model,omitempty"`  // Model name (e.g., "mistral-7b", "llama-3-8b")
+	Engine string `yaml:"engine,omitempty"` // Inference engine (ollama, vllm)
 
 	// Internal fields (not from YAML, computed at load time)
 	AgentDir      string        `yaml:"-"`

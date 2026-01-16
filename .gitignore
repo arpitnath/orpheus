@@ -65,3 +65,7 @@ HANDOFF.md
 ONBOARDING.md
 CURRENT_STATE.md
 claude_ref_dev_docs/
+
+# Claude Capsule Kit (generated at runtime)
+.claude/**
+CLAUDE.md

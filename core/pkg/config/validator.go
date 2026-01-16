@@ -55,6 +55,13 @@ func Validate(cfg *AgentConfig) error {
 		}
 	}
 
+	// Validate engine if specified
+	if cfg.Engine != "" {
+		if err := validateEngine(cfg.Engine); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -106,4 +113,18 @@ func validateModuleExists(cfg *AgentConfig) error {
 	}
 
 	return NewFieldError(ErrCodeNotFound, "module", "module file not found: "+cfg.Module)
+}
+
+// validateEngine checks if the inference engine is supported
+func validateEngine(engine string) error {
+	validEngines := []string{"ollama", "vllm"}
+
+	for _, valid := range validEngines {
+		if engine == valid {
+			return nil
+		}
+	}
+
+	return NewFieldError(ErrCodeInvalidValue, "engine",
+		"unsupported engine: "+engine+". Supported: ollama, vllm")
 }

@@ -6,8 +6,9 @@ entrypoint: handler
 memory: 512
 timeout: 120
 
-# Use Ollama via ServiceManager (fully self-contained)
+# Model server via ServiceManager
 model: mistral
+engine: vllm  # Use vLLM for production GPU inference
 
 env:
   - WORKSPACE_DIR=/workspace

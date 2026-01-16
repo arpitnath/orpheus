@@ -6,9 +6,9 @@ entrypoint: handler
 memory: 512
 timeout: 600  # 10 min - LLM inference can be slow
 
-# Model specification - ServiceManager handles everything
-# Orpheus auto-detects: macOS → Ollama, Linux+GPU → vLLM
+# Model specification - ServiceManager handles model server lifecycle
 model: mistral
+engine: vllm  # Use vLLM for production GPU inference (fallback: ollama for local dev)
 
 # Environment variables
 env:

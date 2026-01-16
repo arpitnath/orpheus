@@ -344,9 +344,8 @@ func (m *Manager) createServer(config ModelConfig) (ModelServer, error) {
 	case "ollama":
 		return NewOllamaServer(config.Name, mode, endpoint), nil
 
-	// TODO: Add vLLM for Linux
-	// case "vllm":
-	//     return NewVLLMServer(config.Name, mode, endpoint), nil
+	case "vllm":
+		return NewVLLMServer(config.Name, mode, endpoint), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported server type: %s", serverType)
@@ -411,8 +410,8 @@ func isOllamaRunningLocally() bool {
 
 // detectServerType auto-detects the best server for current platform
 func (m *Manager) detectServerType() string {
-	// For now, always use Ollama
-	// TODO: Detect Linux + GPU -> use vLLM
+	// Default to Ollama (works on all platforms)
+	// Explicit engine choice in agent.yaml takes precedence over this
 	if runtime.GOOS == "darwin" {
 		return "ollama"
 	}

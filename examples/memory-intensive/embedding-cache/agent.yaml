@@ -6,8 +6,9 @@ entrypoint: handler
 memory: 512  # CONFIGURABLE for different OOM tests
 timeout: 300
 
-# ServiceManager integration (use local Mistral)
+# ServiceManager integration
 model: mistral
+engine: vllm  # Use vLLM for production GPU inference
 
 env:
   - COLLECTIONS_DIR=/agent/data/collections

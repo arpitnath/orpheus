@@ -42,7 +42,7 @@ const (
 //   - user: Adds complexity, we use non-root UID instead
 //
 // Runtime support:
-//   - python3: Uses /usr/local/bin/python3.10 with _entrypoint.py
+//   - python3: Uses /usr/bin/python3 with _entrypoint.py
 //   - nodejs20: Uses /usr/local/bin/node with _entrypoint.mjs
 func GenerateSpec(cfg *config.AgentConfig) *Spec {
 	// Calculate memory limit in bytes
@@ -54,21 +54,21 @@ func GenerateSpec(cfg *config.AgentConfig) *Spec {
 
 	switch cfg.Runtime {
 	case config.RuntimeNodeJS20:
-		// Node.js 20 runtime
+		// Node.js 20 runtime (NodeSource installs to /usr/bin/)
 		args = []string{
-			"/usr/local/bin/node",
+			"/usr/bin/node",
 			"/agent/_entrypoint.mjs",
 		}
 		env = []string{
-			"PATH=/usr/local/bin:/usr/bin:/bin",
-			"NODE_PATH=/packages:/agent/node_modules:/agent",
+			"PATH=/usr/bin:/usr/local/bin:/bin",
+			"NODE_PATH=/agent/node_modules:/agent",
 			"NODE_ENV=production",
 			"HOME=/tmp", // Non-root user needs writable HOME
 		}
 	default:
 		// Python 3 runtime (default)
 		args = []string{
-			"/usr/local/bin/python3.10",
+			"/usr/bin/python3",
 			"/agent/_entrypoint.py",
 		}
 		env = []string{

@@ -272,14 +272,20 @@ func resolveWorkspacePath(agentPath string) string {
 }
 
 // resolveImagePath determines the rootfs path for the agent.
-// It checks for deployed images in ~/.orpheus/agents/{name}/
-// and falls back to the agent directory if not deployed.
+// It checks for deployed images in multiple locations and
+// falls back to the agent directory if not deployed.
 //
 // With base image merging, the directory structure is:
-//   ~/.orpheus/agents/{name}/        <- rootfs (lib, usr, etc)
-//   ~/.orpheus/agents/{name}/agent/  <- agent code (agent.yaml, etc)
+//   {base}/agents/{name}/        <- rootfs (lib, usr, etc)
+//   {base}/agents/{name}/agent/  <- agent code (agent.yaml, etc)
 //
 // The agentPath may point to either the rootfs or the agent code directory.
+//
+// Search order:
+//  1. System-wide: /var/lib/orpheus/agents/{name}
+//  2. User home: ~/.orpheus/agents/{name}
+//  3. Lima/Docker mounted macOS home (if path contains /Users/)
+//  4. Original agentPath's parent (if agentPath ends in /agent)
 func resolveImagePath(agentPath string) string {
 	// Get agent name from path
 	// If path ends with /agent, use parent directory name
@@ -289,36 +295,41 @@ func resolveImagePath(agentPath string) string {
 		agentName = filepath.Base(filepath.Dir(agentPath))
 	}
 
-	// Try multiple possible home directories:
-	// 1. Current user's home (daemon might run as different user)
-	// 2. Extract home from agent path (for Lima/Docker scenarios where macOS home is mounted)
-	homeDirs := []string{}
+	// Build list of candidate paths to check
+	candidatePaths := []string{}
 
-	// Add current user home
+	// 1. System-wide path (most common for production/EC2)
+	candidatePaths = append(candidatePaths, filepath.Join("/var/lib/orpheus/agents", agentName))
+
+	// 2. User home path
 	if home, err := os.UserHomeDir(); err == nil {
-		homeDirs = append(homeDirs, home)
+		candidatePaths = append(candidatePaths, filepath.Join(home, ".orpheus", "agents", agentName))
 	}
 
-	// Extract home directory from agent path if it looks like /Users/<name>/...
-	// This handles Lima VM where macOS home is mounted at same path
+	// 3. Extract home from agent path for Lima/Docker scenarios
+	// where macOS home is mounted at same path
 	if len(agentPath) > 7 && agentPath[:7] == "/Users/" {
 		// Find the home directory by locating the second slash after /Users/
 		for i := 7; i < len(agentPath); i++ {
 			if agentPath[i] == '/' {
-				homeDirs = append(homeDirs, agentPath[:i])
+				macHome := agentPath[:i]
+				candidatePaths = append(candidatePaths, filepath.Join(macHome, ".orpheus", "agents", agentName))
 				break
 			}
 		}
 	}
 
-	// Use deployed agent image
-	// Try each home directory until we find a valid deployed agent
-	for _, home := range homeDirs {
-		deployedPath := filepath.Join(home, ".orpheus", "agents", agentName)
+	// 4. If agentPath ends in /agent, the parent directory might be the rootfs
+	if filepath.Base(agentPath) == "agent" {
+		parentPath := filepath.Dir(agentPath)
+		candidatePaths = append(candidatePaths, parentPath)
+	}
 
+	// Try each candidate path until we find a valid rootfs
+	for _, path := range candidatePaths {
 		// Verify it's a complete rootfs (must have /lib for dynamic linker)
-		if _, err := os.Stat(filepath.Join(deployedPath, "lib")); err == nil {
-			return deployedPath
+		if _, err := os.Stat(filepath.Join(path, "lib")); err == nil {
+			return path
 		}
 	}
 

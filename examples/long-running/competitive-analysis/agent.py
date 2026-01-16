@@ -28,8 +28,8 @@ from pydantic import BaseModel
 # Configuration
 # ─────────────────────────────────────────────────────────────
 
-OPENAI_MODEL = "gpt-4o"
-ANTHROPIC_MODEL = "claude-3-5-sonnet-20241022"
+OPENAI_MODEL = "gpt-5-mini"  # Latest GPT-5 mini model (Jan 2026)
+ANTHROPIC_MODEL = "claude-haiku-4-5"  # Latest Haiku 4.5 (Jan 2026)
 
 # Initialize clients
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))

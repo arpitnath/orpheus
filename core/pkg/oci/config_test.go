@@ -27,7 +27,7 @@ func TestGenerateSpec_Python(t *testing.T) {
 	// Should contain python3 executable
 	foundPython := false
 	for _, arg := range spec.Process.Args {
-		if arg == "/usr/local/bin/python3.10" || arg == "python3" {
+		if arg == "/usr/bin/python3" || arg == "python3" {
 			foundPython = true
 			break
 		}
