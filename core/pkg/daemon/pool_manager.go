@@ -117,13 +117,14 @@ func (pm *PoolManager) CreatePool(agentName string) error {
 	pm.autoscaler.RegisterPool(agentName, pool, policy)
 	pm.autoscaler.RegisterQueueMetrics(agentName, queue)
 
-	// Start worker loops (initial workers = minWorkers)
-	numWorkers := policy.MinWorkers
-	if numWorkers < 1 {
-		numWorkers = 1
+	// Start worker loops (need MaxWorkers goroutines for full concurrency)
+	// Each goroutine can independently dequeue and dispatch work
+	numLoops := policy.MaxWorkers
+	if numLoops < 1 {
+		numLoops = 1
 	}
 
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < numLoops; i++ {
 		pm.wg.Add(1)
 		go pm.workerLoop(agentPool)
 	}

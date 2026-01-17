@@ -3,12 +3,12 @@ runtime: python3
 module: rag_agent
 entrypoint: handler
 
-memory: 512
+memory: 1024
 timeout: 600  # 10 min - LLM inference can be slow
 
 # Model specification - ServiceManager handles model server lifecycle
-model: mistral
-engine: vllm  # Use vLLM for production GPU inference (fallback: ollama for local dev)
+model: tinyllama
+engine: ollama  # Using Ollama for CPU testing (no rate limits)
 
 # Environment variables
 env:
@@ -23,4 +23,4 @@ scaling:
   scale_down_threshold: 0.3
   scale_up_delay: "15s"
   scale_down_delay: "60s"
-  queue_size: 20
+  queue_size: 50
