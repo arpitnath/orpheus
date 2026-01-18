@@ -28,6 +28,7 @@ import { ExecLogCrashed } from './components/ExecLogCrashed.js';
 import { AgentPs } from './components/AgentPs.js';
 import { AgentInspect } from './components/inspect/index.js';
 import { PoolStats } from './components/PoolStats.js';
+import type { ExecLogFilters } from './types/index.js';
 import { HealthCheck } from './components/HealthCheck.js';
 import { Validate } from './components/Validate.js';
 import { c, label } from './lib/format.js';
@@ -442,48 +443,84 @@ program
   .description('Show execution history')
   .argument('[agent]', 'Filter by agent name')
   .option('-n, --limit <count>', 'Number of runs to show', '20')
-  .action(async (agentName: string | undefined, options: { limit?: string }) => {
-    const { execSync } = await import('node:child_process');
-    const { platform } = await import('node:os');
-    const logPath = '/var/log/orpheusd.log';
-    const limit = parseInt(options.limit || '20', 10);
-
+  .option('--session <id>', 'Filter by session ID')
+  .option('--worker <id>', 'Filter by worker ID')
+  .option('--status <state>', 'Filter by state (QUEUED/STARTED/COMPLETED/FAILED)')
+  .action(async (agentName: string | undefined, options: { limit?: string; session?: string; worker?: string; status?: string }) => {
     try {
-      let cmd: string;
-      if (platform() === 'darwin') {
-        // macOS - grep execution lines via Lima VM
-        cmd = `limactl shell orpheus -- grep -E "Executing|execution completed|execution failed" ${logPath} 2>/dev/null || echo ""`;
-      } else {
-        // Linux - grep directly
-        cmd = `grep -E "Executing|execution completed|execution failed" ${logPath} 2>/dev/null || echo ""`;
-      }
+      const client = createClient();
+      const limit = parseInt(options.limit || '20', 10);
 
-      let output = execSync(cmd, { encoding: 'utf-8' });
+      // Build filters
+      const filters: ExecLogFilters = {
+        agent: agentName,
+        limit,
+        status: options.status,
+        session: options.session,
+        worker: options.worker,
+      };
 
-      // Filter by agent if specified
-      if (agentName) {
-        output = output.split('\n').filter(l => l.includes(agentName)).join('\n');
-      }
+      // Call ExecLog API
+      const response = await client.getExecLogs(filters);
 
-      const lines = output.split('\n').filter(l => l.trim());
-      const limitedLines = lines.slice(-limit);
-
-      if (limitedLines.length === 0) {
+      if (!response.data || response.data.length === 0) {
         console.log('No execution history found');
         return;
       }
 
-      console.log('Recent Executions:\n');
-      console.log('─'.repeat(70));
-      for (const line of limitedLines) {
-        // Color-code based on content
-        if (line.includes('failed')) {
-          console.log(`\x1b[31m${line}\x1b[0m`);
-        } else if (line.includes('completed')) {
-          console.log(`\x1b[32m${line}\x1b[0m`);
-        } else {
-          console.log(line);
+      // Display header
+      const agentFilter = agentName ? ` for ${agentName}` : '';
+      console.log(`\nExecution History${agentFilter} (${response.total} total)\n`);
+      console.log('─'.repeat(120));
+      console.log(
+        'TIMESTAMP           REQUEST_ID                            STATE      WORKER                          DURATION    SESSION'
+      );
+      console.log('─'.repeat(120));
+
+      // Group entries by request_id to show complete lifecycle
+      const groupedByRequest = new Map<string, typeof response.data>();
+      for (const entry of response.data) {
+        if (!groupedByRequest.has(entry.request_id)) {
+          groupedByRequest.set(entry.request_id, []);
         }
+        groupedByRequest.get(entry.request_id)!.push(entry);
+      }
+
+      // Display each request's lifecycle
+      for (const [_requestId, entries] of groupedByRequest) {
+        const sortedEntries = entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+        for (const entry of sortedEntries) {
+          const timestamp = new Date(entry.timestamp).toLocaleTimeString('en-US', { hour12: false });
+          const requestIdShort = entry.request_id.substring(0, 36);
+          const state = entry.state.padEnd(10);
+          const workerId = (entry.worker_id || '-').padEnd(30);
+          const duration = entry.duration_ms ? `${(entry.duration_ms / 1000).toFixed(1)}s`.padEnd(10) : '-'.padEnd(10);
+          const sessionId = entry.session_id ? entry.session_id.substring(0, 20) + '...' : '-';
+
+          // Color code by state
+          let color = '\x1b[0m'; // Default
+          if (entry.state === 'COMPLETED') color = '\x1b[32m'; // Green
+          if (entry.state === 'FAILED' || entry.state === 'CRASHED') color = '\x1b[31m'; // Red
+          if (entry.state === 'STARTED') color = '\x1b[33m'; // Yellow
+          if (entry.state === 'QUEUED') color = '\x1b[36m'; // Cyan
+
+          console.log(`${color}${timestamp}  ${requestIdShort}  ${state}  ${workerId}  ${duration}  ${sessionId}\x1b[0m`);
+
+          // Show error if present
+          if (entry.error) {
+            console.log(`  ${'\x1b[31m'}└─ Error: ${entry.error}\x1b[0m`);
+          }
+        }
+
+        console.log(''); // Blank line between requests
+      }
+
+      // Footer with pagination info
+      if (response.total_pages > 1) {
+        console.log('─'.repeat(120));
+        console.log(`Page ${response.page}/${response.total_pages} | Showing ${response.count} of ${response.total} total executions`);
+        console.log(`Use --limit to see more, or add filters: --status FAILED --session <id> --worker <id>`);
       }
     } catch (err) {
       console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);

@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	goruntime "runtime"
 	"syscall"
 	"time"
@@ -72,11 +71,8 @@ func runServer() {
 	}
 
 	// Initialize ExecLog directory
-	execlogDir := "/var/lib/orpheus/execlog"
-	if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
-		home, _ := os.UserHomeDir()
-		execlogDir = filepath.Join(home, ".orpheus", "execlog")
-	}
+	// Use /tmp for Lima VM compatibility (read-write filesystem)
+	execlogDir := "/tmp/orpheus-execlog"
 	if err := os.MkdirAll(execlogDir, 0755); err != nil {
 		log.Fatalf("Failed to create execlog directory: %v", err)
 	}
