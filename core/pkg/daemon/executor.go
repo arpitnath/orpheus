@@ -49,7 +49,7 @@ func Execute(ctx context.Context, req *RunRequest, serviceManager *service.Manag
 
 			modelConfig := service.ModelConfig{
 				Name:   cfg.Model,
-				Server: "auto", // Auto-detect backend (Ollama on Mac, vLLM on Linux+GPU)
+				Server: cfg.Engine, // Use agent's engine field; empty triggers auto-detect
 			}
 			modelEndpoint, err := serviceManager.EnsureModelServer(ctx, modelConfig)
 			if err != nil {
@@ -162,7 +162,7 @@ func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime
 
 			modelConfig := service.ModelConfig{
 				Name:   cfg.Model,
-				Server: "auto", // Auto-detect backend
+				Server: cfg.Engine, // Use agent's engine field; empty triggers auto-detect
 			}
 			modelEndpoint, err := serviceManager.EnsureModelServer(ctx, modelConfig)
 			if err != nil {
