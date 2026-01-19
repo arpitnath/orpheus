@@ -1,0 +1,132 @@
+---
+title: 'Common Issues'
+description: 'Solutions to frequent problems'
+---
+
+## Agent Won't Deploy
+
+**Error:** `agent.yaml not found`
+
+**Fix:** Ensure your directory has `agent.yaml` at the root:
+```
+my-agent/
+├── agent.yaml    # Required
+└── agent.py
+```
+
+---
+
+**Error:** `entrypoint function not found`
+
+**Fix:** Check that your handler function exists and matches `agent.yaml`:
+```yaml
+# agent.yaml
+entrypoint: handler
+```
+```python
+# agent.py
+def handler(input_data):  # Must match
+    ...
+```
+
+---
+
+## Daemon Not Running
+
+**Error:** `connection refused` or `daemon not reachable`
+
+**Fix:**
+```bash
+# Check status
+orpheus status
+
+# Start daemon (macOS)
+orpheus vm start
+
+# Start daemon (Linux)
+sudo systemctl start orpheusd
+```
+
+---
+
+## Worker Timeout
+
+**Error:** Request killed, no response
+
+**Cause:** Task took longer than `timeout` in `agent.yaml`
+
+**Fix:** Increase timeout:
+```yaml
+timeout: 600  # 10 minutes
+```
+
+---
+
+## Out of Memory
+
+**Symptom:** Worker crashes during execution
+
+**Fix:** Increase memory limit:
+```yaml
+memory: 2048  # 2GB
+```
+
+---
+
+## Cold Start Delays
+
+**Symptom:** First request is slow
+
+**Cause:** `min_workers: 0` or worker died
+
+**Fix:** Keep workers warm:
+```yaml
+scaling:
+  min_workers: 1
+```
+
+---
+
+## Session Not Sticky
+
+**Symptom:** Requests with same session hit different workers
+
+**Possible causes:**
+1. Worker was busy, request went to another
+2. Worker died between requests
+
+**This is expected behavior.** Session affinity is best-effort. For guaranteed state, use workspace.
+
+---
+
+## Files Missing After Restart
+
+**Cause:** Files were in `/tmp` (ephemeral) instead of `/workspace` (persistent)
+
+**Fix:** Always use `/workspace` for data you need to keep:
+```python
+# Wrong (lost on restart)
+with open('/tmp/data.json', 'w') as f: ...
+
+# Right (persists forever)
+with open('/workspace/data.json', 'w') as f: ...
+```
+
+---
+
+## Port Already in Use
+
+**Error:** `address already in use :7777`
+
+**Fix:**
+```bash
+# Find what's using the port
+lsof -i :7777
+
+# Kill it or use different port
+orpheusd --port 7778
+```
+
+<Card title="Debug with ExecLog" icon="search" href="/troubleshooting/execlog-debugging">
+  Find what went wrong →
+</Card>

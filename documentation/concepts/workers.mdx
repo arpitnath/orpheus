@@ -1,0 +1,59 @@
+---
+title: 'Workers & Pools'
+description: 'How Orpheus keeps your agents ready'
+---
+
+## What Are Workers?
+
+Workers are long-lived processes that execute your agent code. Each agent has a pool of workers.
+
+## How Workers Stay Warm
+
+Unlike serverless (where containers die after each request), Orpheus workers:
+
+1. Start when you deploy
+2. Handle requests one at a time
+3. Stay alive between requests
+4. Only die when idle too long
+
+This means no cold starts for subsequent requests.
+
+## Worker Pool
+
+Each agent has a pool with:
+- `min_workers`: Always keep this many ready
+- `max_workers`: Never exceed this many
+
+```yaml
+scaling:
+  min_workers: 1   # Always 1 warm
+  max_workers: 10  # Scale up to 10
+```
+
+## Worker Lifecycle
+
+```
+Deploy → Create Pool → Spawn min_workers
+                              ↓
+Request → Queue → Worker picks up → Execute → Return to pool
+                              ↓
+Idle timeout → Remove worker (down to min_workers)
+```
+
+## Check Worker Status
+
+```bash
+orpheus stats my-agent
+```
+
+Shows:
+- `current`: How many workers running
+- `healthy`: How many ready for requests
+- `queue.depth`: Requests waiting
+
+## When Workers Scale
+
+- **Scale up:** Queue building up (more requests than workers can handle)
+- **Scale down:** Workers idle (no requests for a while)
+
+See [Autoscaling](/concepts/autoscaling) for details.

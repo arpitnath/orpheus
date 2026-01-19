@@ -1,0 +1,134 @@
+---
+title: 'Scale Under Load'
+description: 'Tune autoscaling for your workload'
+---
+
+Orpheus scales workers based on queue depth, not CPU.
+
+## Default Scaling
+
+```yaml
+scaling:
+  min_workers: 1      # Always keep 1 ready
+  max_workers: 10     # Scale up to 10
+```
+
+With defaults, Orpheus:
+- Adds workers when queue backs up
+- Removes idle workers after 5 minutes
+- Always keeps at least `min_workers` warm
+
+## How Scaling Works
+
+Every 5 seconds, Orpheus checks:
+
+```
+utilization = (queued + processing) / current_workers
+
+If utilization > 3.0 → add a worker
+If utilization < 0.5 → remove a worker
+```
+
+**Example:**
+- 12 requests queued, 3 workers
+- Utilization = 12/3 = 4.0
+- 4.0 > 3.0 → scale up
+
+## Monitor Scaling
+
+```bash
+orpheus stats my-agent
+```
+
+**Output:**
+```json
+{
+  "workers": {
+    "current": 5,
+    "healthy": 5,
+    "min": 1,
+    "max": 10
+  },
+  "queue": {
+    "depth": 3,
+    "processing": 5
+  }
+}
+```
+
+## Tuning for Your Workload
+
+### Fast Tasks (< 1 second)
+
+```yaml
+scaling:
+  min_workers: 2      # More warm workers
+  max_workers: 20     # Higher ceiling
+```
+
+### Slow Tasks (> 30 seconds)
+
+```yaml
+scaling:
+  min_workers: 1
+  max_workers: 5      # Fewer workers (each busy longer)
+```
+
+### Bursty Traffic
+
+```yaml
+scaling:
+  min_workers: 3      # Handle burst immediately
+  max_workers: 15
+```
+
+### Cost-Sensitive
+
+```yaml
+scaling:
+  min_workers: 0      # Scale to zero when idle
+  max_workers: 5
+```
+
+<Note>
+`min_workers: 0` means cold starts. First request after idle period will be slower.
+</Note>
+
+## Zero Cold Starts
+
+For instant responses:
+
+```yaml
+scaling:
+  min_workers: 1      # Always one worker warm
+```
+
+This keeps one worker running even with no traffic.
+
+## Test Scaling
+
+Send concurrent requests:
+
+```bash
+# Send 20 requests in parallel
+for i in {1..20}; do
+  orpheus run my-agent '{"id": '$i'}' &
+done
+wait
+
+# Check how many workers scaled up
+orpheus stats my-agent
+```
+
+## Scaling Limits
+
+| Setting | Effect |
+|---------|--------|
+| `min_workers` | Minimum warm workers (even when idle) |
+| `max_workers` | Hard ceiling (won't exceed) |
+
+If `max_workers` reached and queue still growing, requests wait.
+
+<Card title="Troubleshooting" icon="wrench" href="/troubleshooting/common-issues">
+  Fix common issues →
+</Card>

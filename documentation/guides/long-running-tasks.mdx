@@ -1,0 +1,125 @@
+---
+title: 'Handle Long-Running Tasks'
+description: 'Run agents for minutes without timeout issues'
+---
+
+Orpheus supports tasks that run for 30+ minutes.
+
+## Configure Timeout
+
+Set the timeout in your `agent.yaml`:
+
+```yaml
+name: analysis-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+timeout: 1800  # 30 minutes (in seconds)
+memory: 2048   # More memory for heavy processing
+```
+
+## Example: Long Analysis Task
+
+```python
+import time
+
+def handler(input_data):
+    documents = input_data.get('documents', [])
+
+    results = []
+    for i, doc in enumerate(documents):
+        # Process each document (might take minutes)
+        result = analyze_document(doc)
+        results.append(result)
+
+        # Progress is visible in logs
+        print(f"Processed {i+1}/{len(documents)}")
+
+    return {
+        'results': results,
+        'total': len(results)
+    }
+
+def analyze_document(doc):
+    # Simulate heavy processing
+    time.sleep(30)  # 30 seconds per doc
+    return {'summary': f"Analyzed: {doc[:50]}..."}
+```
+
+## Run Long Tasks
+
+```bash
+# This might take 10+ minutes
+orpheus run analysis-agent '{"documents": ["doc1", "doc2", "doc3"]}'
+```
+
+The CLI waits for completion. For very long tasks, consider running in background.
+
+## Check Progress
+
+While a task is running:
+
+```bash
+# See queue and worker status
+orpheus stats analysis-agent
+
+# View recent executions
+orpheus runs analysis-agent
+```
+
+## Handle Failures
+
+Long tasks are more likely to fail. Use workspace to save progress:
+
+```python
+import json
+import os
+
+def handler(input_data):
+    documents = input_data.get('documents', [])
+    progress_file = '/workspace/progress.json'
+
+    # Load previous progress
+    if os.path.exists(progress_file):
+        with open(progress_file) as f:
+            progress = json.load(f)
+    else:
+        progress = {'completed': [], 'results': []}
+
+    # Process remaining documents
+    for doc in documents:
+        if doc in progress['completed']:
+            continue  # Skip already processed
+
+        result = analyze_document(doc)
+        progress['completed'].append(doc)
+        progress['results'].append(result)
+
+        # Save progress after each doc
+        with open(progress_file, 'w') as f:
+            json.dump(progress, f)
+
+    return {'results': progress['results']}
+```
+
+If the task fails, retry it - already-processed documents are skipped.
+
+## Timeout vs Memory
+
+| Issue | Symptom | Fix |
+|-------|---------|-----|
+| Timeout | Request killed after N seconds | Increase `timeout` |
+| Out of memory | Worker crashes | Increase `memory` |
+| Both | Large data processing | Split into smaller chunks |
+
+## Best Practices
+
+1. **Save progress incrementally** - Don't lose work on failure
+2. **Log progress** - Use `print()` for visibility
+3. **Set realistic timeout** - Add buffer for API latency
+4. **Use workspace for checkpoints** - Resume after failures
+
+<Card title="Next: Scaling" icon="chart-line" href="/guides/scaling">
+  Tune autoscaling for your workload →
+</Card>

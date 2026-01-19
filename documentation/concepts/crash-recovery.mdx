@@ -1,0 +1,51 @@
+---
+title: 'Crash Recovery'
+description: 'How Orpheus handles failures safely'
+---
+
+## Safe-First Design
+
+When something crashes, Orpheus does NOT auto-retry.
+
+Why? Your agent might have side effects:
+- Sent an email
+- Charged a card
+- Called an API
+
+Auto-retry = potential duplicate. Orpheus logs it and lets you decide.
+
+## Request States
+
+| State | Meaning |
+|-------|---------|
+| `completed` | Success |
+| `failed` | Your handler returned error |
+| `crashed` | Daemon died mid-execution |
+
+## Find Crashed Requests
+
+```bash
+orpheus runs my-agent --state crashed
+```
+
+## What to Do
+
+1. **Check what happened:** Look at workspace, logs
+2. **If idempotent:** Safe to retry
+3. **If has side effects:** Investigate first
+
+## ExecLog
+
+Every request is logged with:
+- Request ID
+- Worker ID
+- Session ID (if any)
+- State
+- Duration
+- Error (if failed)
+
+Use it for debugging and audit trails.
+
+```bash
+orpheus runs my-agent --state failed
+```

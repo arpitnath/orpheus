@@ -1,0 +1,86 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "Orpheus",
+  "logo": {
+    "dark": "/logo/dark.svg",
+    "light": "/logo/light.svg"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#2563eb",
+    "light": "#60a5fa",
+    "dark": "#1e40af",
+    "anchors": {
+      "from": "#2563eb",
+      "to": "#1e40af"
+    }
+  },
+  "topbarLinks": [
+    {
+      "name": "GitHub",
+      "url": "https://github.com/zoops-ai/orpheus"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "Quick Start",
+    "url": "/quickstart"
+  },
+  "navigation": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        "overview",
+        "quickstart",
+        "installation"
+      ]
+    },
+    {
+      "group": "Guides",
+      "pages": [
+        "guides/deploy-agent",
+        "guides/stateful-sessions",
+        "guides/workspace-persistence",
+        "guides/long-running-tasks",
+        "guides/scaling"
+      ]
+    },
+    {
+      "group": "Concepts",
+      "pages": [
+        "concepts/workers",
+        "concepts/autoscaling",
+        "concepts/sessions",
+        "concepts/crash-recovery"
+      ]
+    },
+    {
+      "group": "Reference",
+      "pages": [
+        "reference/cli",
+        "config/agent-yaml",
+        "api-reference/introduction",
+        "api-reference/deploy",
+        "api-reference/run",
+        "api-reference/execlog"
+      ]
+    },
+    {
+      "group": "Examples",
+      "pages": [
+        "examples/calculator",
+        "examples/rag-search"
+      ]
+    },
+    {
+      "group": "Troubleshooting",
+      "pages": [
+        "troubleshooting/common-issues",
+        "troubleshooting/execlog-debugging",
+        "troubleshooting/faq"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "github": "https://github.com/zoops-ai/orpheus"
+  }
+}

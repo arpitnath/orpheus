@@ -1,0 +1,44 @@
+---
+title: 'Overview'
+description: 'Runtime for long-running AI agents'
+---
+
+Orpheus is a runtime for AI agents that need to remember things.
+
+It keeps workers warm (no cold starts), persists files across requests, and routes sessions to the same worker. Deploy with `orpheus deploy`, run with `orpheus run`.
+
+## What Orpheus Does
+
+| Feature | What It Means |
+|---------|---------------|
+| **Warm workers** | No waiting for containers to start |
+| **Workspace persistence** | Files in `/workspace` survive across requests |
+| **Session affinity** | Same user routes to same worker |
+| **Queue-depth scaling** | Scales when work piles up |
+| **Crash recovery** | Every request tracked, nothing lost |
+
+## Quick Example
+
+```bash
+# Deploy an agent
+orpheus deploy ./my-agent
+
+# Run it (instant - worker already warm)
+orpheus run my-agent '{"query": "hello"}'
+```
+
+## When to Use Orpheus
+
+- AI agents that run for minutes (not milliseconds)
+- Conversational agents that need context
+- Agents that create or modify files
+- Workflows that shouldn't lose state on restart
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Deploy in 2 minutes
+  </Card>
+  <Card title="First Guide" icon="book" href="/guides/deploy-agent">
+    Step-by-step walkthrough
+  </Card>
+</CardGroup>

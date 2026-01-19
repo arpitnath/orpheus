@@ -1,0 +1,67 @@
+---
+title: 'Deploy Agent'
+api: 'POST /v1/deploy'
+description: 'Deploy an agent to Orpheus'
+---
+
+## Request
+
+```http
+POST /v1/deploy
+Content-Type: application/octet-stream
+
+[agent tarball]
+```
+
+The tarball should contain:
+```
+agent-name/
+  agent.yaml
+  agent.py (or index.js)
+  requirements.txt (optional)
+```
+
+## Create Tarball
+
+```bash
+cd my-agent
+tar -czvf ../my-agent.tar.gz .
+```
+
+## cURL Example
+
+```bash
+curl -X POST http://localhost:7777/v1/deploy \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @my-agent.tar.gz
+```
+
+## Response
+
+**Success (200):**
+```json
+{
+  "agent": "my-agent",
+  "status": "deployed",
+  "workers": 1
+}
+```
+
+**Error (400):**
+```json
+{
+  "error": "agent.yaml not found"
+}
+```
+
+## CLI Equivalent
+
+```bash
+orpheus deploy ./my-agent
+```
+
+The CLI handles tarball creation automatically.
+
+<Card title="Next: Run API" icon="play" href="/api-reference/run">
+  Execute agents via API →
+</Card>

@@ -1,0 +1,101 @@
+---
+title: 'FAQ'
+description: 'Quick answers to common questions'
+---
+
+## General
+
+### What is Orpheus?
+A runtime for AI agents that need to remember things. It keeps workers warm, persists files, and routes sessions to the same worker.
+
+### What languages are supported?
+- Python 3.10+
+- Node.js 18+
+
+### Where does Orpheus run?
+On your machine. It's self-hosted (macOS or Linux).
+
+---
+
+## Deployment
+
+### How do I update my agent?
+Run `orpheus deploy .` again. Workers restart with new code, workspace is preserved.
+
+### Can I have multiple agents?
+Yes. Each agent has its own worker pool and workspace.
+
+### What happens to workspace on redeploy?
+Nothing. Workspace persists across redeployments. Only `orpheus undeploy` deletes it.
+
+---
+
+## Execution
+
+### How long can tasks run?
+As long as you configure. Set `timeout: 3600` for 1 hour. Tested up to 30+ minutes.
+
+### Are requests retried on failure?
+No. Orpheus uses safe-first design. Failed/crashed requests are logged, not auto-retried. You decide whether to retry.
+
+### What's the difference between failed and crashed?
+- **Failed:** Your handler returned an error
+- **Crashed:** Daemon died while your handler was running
+
+---
+
+## Sessions
+
+### Do sessions guarantee same worker?
+Best-effort. If the preferred worker is busy, another worker handles the request.
+
+### How long do sessions last?
+Until the worker dies or is removed (idle timeout).
+
+### Should I use sessions or workspace?
+- **Sessions:** For in-memory state (fast, lost on worker death)
+- **Workspace:** For durable state (survives everything)
+- **Both:** For conversational agents (session for speed, workspace for durability)
+
+---
+
+## Scaling
+
+### When does Orpheus scale up?
+When queue depth > 3 requests per worker.
+
+### When does it scale down?
+When queue depth < 0.5 requests per worker, after idle timeout.
+
+### Can I scale to zero?
+Yes. Set `min_workers: 0`. First request after idle will have a cold start.
+
+---
+
+## Resources
+
+### How much memory do agents get?
+Configurable via `memory` in agent.yaml. Default is 512MB.
+
+### Where are workspaces stored?
+`~/.orpheus/workspaces/{agent-name}/`
+
+### Where are logs?
+`~/.orpheus/logs/`
+
+---
+
+## Troubleshooting
+
+### Agent deploys but doesn't respond
+Check `orpheus stats my-agent` - are workers healthy?
+
+### Requests are slow
+Check if `min_workers: 0` (cold starts). Set to 1+ for warm workers.
+
+### Worker keeps crashing
+Likely out of memory. Increase `memory` in agent.yaml.
+
+<Card title="Back to Guides" icon="book" href="/guides/deploy-agent">
+  ← Deploy Guide
+</Card>

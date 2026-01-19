@@ -1,0 +1,72 @@
+---
+title: 'API Overview'
+description: 'Orpheus REST API reference'
+---
+
+## Base URL
+
+```
+http://localhost:7777
+```
+
+For remote servers:
+```
+http://YOUR_SERVER_IP:7777
+```
+
+## Authentication
+
+**OSS version:** No authentication required.
+
+**Cloud version:** API keys (coming soon).
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/deploy` | Deploy an agent |
+| `POST` | `/v1/agents/{name}/run` | Execute an agent |
+| `GET` | `/v1/agents` | List agents |
+| `GET` | `/v1/agents/{name}/stats` | Get agent stats |
+| `GET` | `/v1/execlog` | Query execution history |
+| `DELETE` | `/v1/agents/{name}` | Undeploy agent |
+
+## Response Format
+
+All responses are JSON:
+
+```json
+{
+  "data": { ... },
+  "error": null
+}
+```
+
+Or on error:
+
+```json
+{
+  "data": null,
+  "error": "Error message"
+}
+```
+
+## Quick Examples
+
+**Deploy:**
+```bash
+curl -X POST http://localhost:7777/v1/deploy \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @agent.tar.gz
+```
+
+**Run:**
+```bash
+curl -X POST http://localhost:7777/v1/agents/my-agent/run \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"query": "hello"}}'
+```
+
+<Card title="Deploy API" icon="upload" href="/api-reference/deploy">
+  Deploy endpoint details →
+</Card>

@@ -1,0 +1,45 @@
+---
+title: 'Sessions'
+description: 'Route same user to same worker'
+---
+
+## What Sessions Do
+
+Sessions route requests with the same ID to the same worker.
+
+```bash
+# Both hit the same worker
+orpheus run agent '{}' --session user-123
+orpheus run agent '{}' --session user-123
+```
+
+## Why Use Sessions
+
+Workers keep state in memory. Same worker = same state.
+
+- Loaded models stay loaded
+- Conversation context persists
+- Caches remain warm
+
+## How It Works
+
+1. Request arrives with `session_id`
+2. Orpheus checks which worker last handled that session
+3. Routes to that worker (if available)
+4. Falls back to any worker if busy
+
+## Best-Effort
+
+Sessions are best-effort, not guaranteed:
+- If preferred worker is busy → another handles it
+- If worker dies → new worker, fresh state
+
+For guaranteed persistence, use workspace.
+
+## When to Use
+
+| Need | Solution |
+|------|----------|
+| Fast in-memory state | Sessions |
+| Durable state | Workspace |
+| Both | Sessions + Workspace |

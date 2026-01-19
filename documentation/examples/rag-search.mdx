@@ -1,0 +1,113 @@
+---
+title: 'RAG Search Agent'
+description: 'Long-running agent with external API calls'
+---
+
+## Overview
+
+A retrieval-augmented generation agent that:
+1. Searches a knowledge base
+2. Calls an LLM to synthesize results
+3. Persists search history
+
+This demonstrates long-running tasks and workspace persistence.
+
+## Files
+
+**agent.yaml**
+```yaml
+name: rag-search
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+memory: 1024
+timeout: 300  # 5 minutes for LLM calls
+
+scaling:
+  min_workers: 1
+  max_workers: 3
+```
+
+**agent.py**
+```python
+import os
+import json
+import requests
+
+def handler(input_data):
+    query = input_data.get('query', '')
+
+    # 1. Search (simulate with placeholder)
+    search_results = search_knowledge_base(query)
+
+    # 2. Call LLM
+    answer = call_llm(query, search_results)
+
+    # 3. Log to workspace
+    log_search(query, answer)
+
+    return {
+        'query': query,
+        'answer': answer,
+        'sources': len(search_results),
+        'status': 'success'
+    }
+
+def search_knowledge_base(query):
+    # Replace with your vector DB
+    return [
+        {'title': 'Doc 1', 'content': '...'},
+        {'title': 'Doc 2', 'content': '...'}
+    ]
+
+def call_llm(query, context):
+    # Replace with your LLM API
+    api_key = os.getenv('OPENAI_API_KEY')
+
+    response = requests.post(
+        'https://api.openai.com/v1/chat/completions',
+        headers={'Authorization': f'Bearer {api_key}'},
+        json={
+            'model': 'gpt-4',
+            'messages': [
+                {'role': 'system', 'content': 'Answer based on context.'},
+                {'role': 'user', 'content': f'Context: {context}\n\nQuestion: {query}'}
+            ]
+        },
+        timeout=120
+    )
+
+    return response.json()['choices'][0]['message']['content']
+
+def log_search(query, answer):
+    log_file = '/workspace/search_history.jsonl'
+    with open(log_file, 'a') as f:
+        f.write(json.dumps({'query': query, 'answer': answer[:100]}) + '\n')
+```
+
+## Environment Variables
+
+Set your API key before deploying:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+orpheus deploy .
+```
+
+## Run
+
+```bash
+orpheus run rag-search '{"query": "What is queue-depth autoscaling?"}'
+```
+
+## Key Features Demonstrated
+
+1. **Long timeout** - 5 minutes for LLM calls
+2. **Workspace persistence** - Search history saved
+3. **External API calls** - OpenAI integration
+4. **Error handling** - Graceful failures
+
+<Card title="Back to Examples" icon="code" href="/examples/calculator">
+  ← Calculator Agent
+</Card>
