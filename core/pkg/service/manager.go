@@ -6,8 +6,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -174,7 +176,15 @@ func (m *Manager) restartWithDoubleKill(ctx context.Context) error {
 		m.process = nil
 	}
 
-	port := 11434
+	// Extract port from backend endpoint
+	port := 11434 // default
+	if m.backend != nil {
+		if endpoint, err := url.Parse(m.backend.Endpoint()); err == nil {
+			if p, err := strconv.Atoi(endpoint.Port()); err == nil {
+				port = p
+			}
+		}
+	}
 	if !waitForPortFree(port, 5*time.Second) {
 		return fmt.Errorf("port %d still occupied", port)
 	}
@@ -335,7 +345,7 @@ func (m *Manager) createServer(config ModelConfig) (ModelServer, error) {
 	endpoint := config.Endpoint
 
 	if mode == "" {
-		mode, endpoint = m.detectModeAndEndpoint()
+		mode, endpoint = m.detectModeAndEndpoint(serverType)
 	}
 
 	log.Printf("[service-manager] Creating server: type=%s, mode=%s, endpoint=%s", serverType, mode, endpoint)
@@ -352,26 +362,33 @@ func (m *Manager) createServer(config ModelConfig) (ModelServer, error) {
 	}
 }
 
-// detectModeAndEndpoint auto-detects the management mode and endpoint based on environment
-func (m *Manager) detectModeAndEndpoint() (ServerMode, string) {
+// detectModeAndEndpoint auto-detects the management mode and endpoint based on environment and server type
+func (m *Manager) detectModeAndEndpoint(serverType string) (ServerMode, string) {
+	// Different ports for different server types
+	port := "11434" // Ollama default
+	if serverType == "vllm" {
+		port = "8000" // vLLM default
+	}
+
 	// Check if running in Lima VM (indicates Ollama is on Mac host)
 	if isRunningInLima() {
 		// Lima VM: Ollama runs on Mac host, use external mode
 		log.Printf("[service-manager] Detected Lima VM - using external mode with host.lima.internal")
-		return ServerModeExternal, "http://host.lima.internal:11434"
+		return ServerModeExternal, "http://host.lima.internal:" + port
 	}
 
 	// Check if Ollama is already running locally (another process started it)
-	if isOllamaRunningLocally() {
+	// Note: This check is Ollama-specific, vLLM doesn't have this issue
+	if serverType == "ollama" && isOllamaRunningLocally() {
 		// Ollama already running locally - could be external or we manage it
 		// Default to external to avoid conflicts
 		log.Printf("[service-manager] Detected Ollama already running - using external mode")
-		return ServerModeExternal, "http://localhost:11434"
+		return ServerModeExternal, "http://localhost:" + port
 	}
 
 	// Default: managed mode on localhost
 	log.Printf("[service-manager] Using managed mode on localhost")
-	return ServerModeManaged, "http://localhost:11434"
+	return ServerModeManaged, "http://localhost:" + port
 }
 
 // isRunningInLima checks if we're running inside a Lima VM

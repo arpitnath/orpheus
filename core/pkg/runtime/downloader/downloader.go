@@ -230,14 +230,10 @@ func getContainerfilePath(language, version string) (string, error) {
 	return "", fmt.Errorf("runtimes directory not found")
 }
 
-// normalizeArch converts Go arch to Docker/Podman arch
+// normalizeArch converts Go arch to OCI platform arch
+// OCI spec uses "amd64" and "arm64", not "x86_64" and "aarch64"
 func normalizeArch(arch string) string {
-	switch arch {
-	case "amd64":
-		return "x86_64"
-	case "arm64":
-		return "aarch64"
-	default:
-		return arch
-	}
+	// Go's runtime.GOARCH already uses OCI-compliant names
+	// No conversion needed - amd64 stays amd64, arm64 stays arm64
+	return arch
 }

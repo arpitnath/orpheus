@@ -96,8 +96,7 @@ def call_openai(prompt: str, system: str = None) -> str:
 
     response = openai_client.chat.completions.create(
         model=OPENAI_MODEL,
-        messages=messages,
-        temperature=0.7
+        messages=messages
     )
     return response.choices[0].message.content
 

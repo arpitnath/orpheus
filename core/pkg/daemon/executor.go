@@ -60,6 +60,8 @@ func Execute(ctx context.Context, req *RunRequest, serviceManager *service.Manag
 			cfg.Env = append(cfg.Env,
 				"MODEL_URL="+modelEndpoint,
 				"OPENAI_BASE_URL="+modelEndpoint+"/v1",
+				"MODEL_NAME="+cfg.Model,
+				"OLLAMA_MODEL="+cfg.Model, // For backwards compatibility
 			)
 		}
 		if !hasAPIKey {
@@ -173,6 +175,8 @@ func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime
 			cfg.Env = append(cfg.Env,
 				"MODEL_URL="+modelEndpoint,
 				"OPENAI_BASE_URL="+modelEndpoint+"/v1",
+				"MODEL_NAME="+cfg.Model,
+				"OLLAMA_MODEL="+cfg.Model, // For backwards compatibility
 			)
 		}
 		if !hasAPIKey {
