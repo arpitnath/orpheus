@@ -30,8 +30,8 @@ WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "/workspace"))
 DB_PATH = WORKSPACE_DIR / "patient_sessions.db"
 
 # Model endpoint - ServiceManager injects MODEL_URL automatically
-MODEL_URL = os.getenv("MODEL_URL") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-MODEL_NAME = os.getenv("OLLAMA_MODEL", "mistral")
+MODEL_URL = os.getenv("MODEL_URL") or os.getenv("OLLAMA_BASE_URL", "")
+MODEL_NAME = os.getenv("OLLAMA_MODEL", "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
 
 
 def init_db():
@@ -42,17 +42,20 @@ def init_db():
     cursor = conn.cursor()
 
     # Patient sessions table
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             total_interactions INTEGER DEFAULT 0
         )
-    """)
+    """
+    )
 
     # Conversation history table
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT,
@@ -63,10 +66,12 @@ def init_db():
             sentiment_label TEXT,
             FOREIGN KEY (session_id) REFERENCES sessions(session_id)
         )
-    """)
+    """
+    )
 
     # Topics mentioned table
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS topics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT,
@@ -76,7 +81,8 @@ def init_db():
             last_mentioned TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (session_id) REFERENCES sessions(session_id)
         )
-    """)
+    """
+    )
 
     conn.commit()
     conn.close()
@@ -87,10 +93,13 @@ def ensure_session_exists(session_id: str):
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT OR IGNORE INTO sessions (session_id, created_at, last_active, total_interactions)
         VALUES (?, ?, ?, 0)
-    """, (session_id, datetime.now(), datetime.now()))
+    """,
+        (session_id, datetime.now(), datetime.now()),
+    )
 
     conn.commit()
     conn.close()
@@ -101,12 +110,15 @@ def update_session_activity(session_id: str):
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         UPDATE sessions
         SET last_active = ?,
             total_interactions = total_interactions + 1
         WHERE session_id = ?
-    """, (datetime.now(), session_id))
+    """,
+        (datetime.now(), session_id),
+    )
 
     conn.commit()
     conn.close()
@@ -134,10 +146,13 @@ def add_conversation(session_id: str, role: str, message: str, sentiment: float)
 
     _, label = analyze_sentiment(message) if sentiment != 0.0 else (0.0, "neutral")
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO conversations (session_id, role, message, sentiment_score, sentiment_label)
         VALUES (?, ?, ?, ?, ?)
-    """, (session_id, role, message, sentiment, label))
+    """,
+        (session_id, role, message, sentiment, label),
+    )
 
     conn.commit()
     conn.close()
@@ -148,13 +163,16 @@ def get_conversation_history(session_id: str, limit: int = 10) -> List[Tuple]:
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT role, message, sentiment_label, timestamp
         FROM conversations
         WHERE session_id = ?
         ORDER BY timestamp DESC
         LIMIT ?
-    """, (session_id, limit))
+    """,
+        (session_id, limit),
+    )
 
     rows = cursor.fetchall()
     conn.close()
@@ -168,11 +186,14 @@ def get_session_stats(session_id: str) -> Dict:
     cursor = conn.cursor()
 
     # Basic session info
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT created_at, last_active, total_interactions
         FROM sessions
         WHERE session_id = ?
-    """, (session_id,))
+    """,
+        (session_id,),
+    )
 
     session_row = cursor.fetchone()
     if not session_row:
@@ -182,21 +203,27 @@ def get_session_stats(session_id: str) -> Dict:
     created_at, last_active, total_interactions = session_row
 
     # Sentiment statistics
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT AVG(sentiment_score), COUNT(*)
         FROM conversations
         WHERE session_id = ? AND role = 'patient'
-    """, (session_id,))
+    """,
+        (session_id,),
+    )
 
     avg_sentiment, message_count = cursor.fetchone()
 
     # Sentiment trend (first 3 vs last 3 messages)
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT sentiment_score
         FROM conversations
         WHERE session_id = ? AND role = 'patient'
         ORDER BY timestamp
-    """, (session_id,))
+    """,
+        (session_id,),
+    )
 
     all_sentiments = [row[0] for row in cursor.fetchall()]
 
@@ -218,11 +245,13 @@ def get_session_stats(session_id: str) -> Dict:
         "total_interactions": total_interactions,
         "message_count": message_count or 0,
         "avg_sentiment": round(avg_sentiment or 0.0, 2),
-        "emotional_trend": trend
+        "emotional_trend": trend,
     }
 
 
-def generate_response(patient_message: str, session_id: str, history: List[Tuple], stats: Dict) -> str:
+def generate_response(
+    patient_message: str, session_id: str, history: List[Tuple], stats: Dict
+) -> str:
     """Generate empathetic therapist response using Ollama."""
 
     # Build context from conversation history
@@ -261,12 +290,12 @@ Your response:"""
                 "model": MODEL_NAME,
                 "messages": [
                     {"role": "system", "content": "You are a compassionate therapist."},
-                    {"role": "user", "content": system_prompt}
+                    {"role": "user", "content": system_prompt},
                 ],
                 "temperature": 0.7,
-                "max_tokens": 200
+                "max_tokens": 200,
             },
-            timeout=60
+            timeout=60,
         )
 
         response.raise_for_status()
@@ -284,22 +313,26 @@ def show_progress(session_id: str) -> Dict:
     history = get_conversation_history(session_id, limit=100)
 
     # Analyze sentiment progression
-    patient_messages = [(msg, sentiment) for role, msg, sentiment, _ in history if role == 'patient']
+    patient_messages = [
+        (msg, sentiment) for role, msg, sentiment, _ in history if role == "patient"
+    ]
 
     sentiment_progression = []
     for i, (msg, sentiment) in enumerate(patient_messages, 1):
-        sentiment_progression.append({
-            "message_num": i,
-            "preview": msg[:50] + "..." if len(msg) > 50 else msg,
-            "sentiment": sentiment
-        })
+        sentiment_progression.append(
+            {
+                "message_num": i,
+                "preview": msg[:50] + "..." if len(msg) > 50 else msg,
+                "sentiment": sentiment,
+            }
+        )
 
     return {
         "status": "success",
         "session_summary": stats,
         "sentiment_progression": sentiment_progression,
         "conversation_count": len(history),
-        "persistence_location": str(DB_PATH)
+        "persistence_location": str(DB_PATH),
     }
 
 
@@ -327,7 +360,7 @@ def handler(input_data: Dict) -> Dict:
     if not patient_message:
         return {
             "status": "error",
-            "error": "No message provided. Include 'message' field in request."
+            "error": "No message provided. Include 'message' field in request.",
         }
 
     # Analyze patient message sentiment
@@ -355,11 +388,11 @@ def handler(input_data: Dict) -> Dict:
         "response": therapist_response,
         "patient_sentiment": {
             "score": round(sentiment_score, 2),
-            "label": sentiment_label
+            "label": sentiment_label,
         },
         "session_stats": stats,
         "persistence_proof": f"State stored in {DB_PATH} (survives container restarts)",
-        "session_affinity": f"Routing via X-Session-ID: {session_id}"
+        "session_affinity": f"Routing via X-Session-ID: {session_id}",
     }
 
 
@@ -367,7 +400,7 @@ if __name__ == "__main__":
     # Local testing
     test_input = {
         "session_id": "test-session",
-        "message": "I've been feeling really anxious about work lately"
+        "message": "I've been feeling really anxious about work lately",
     }
 
     result = handler(test_input)
