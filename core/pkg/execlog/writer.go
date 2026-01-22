@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	_ "modernc.org/sqlite"
@@ -72,8 +73,29 @@ func createSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp);
 	`
 
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Safe migration: Add new columns for source tracking (idempotent)
+	// ALTER TABLE ADD COLUMN is safe - SQLite ignores if column exists
+	migrations := []string{
+		`ALTER TABLE events ADD COLUMN source TEXT`,
+		`ALTER TABLE events ADD COLUMN mcp_caller TEXT`,
+	}
+
+	for _, migration := range migrations {
+		_, err := db.Exec(migration)
+		// Ignore "duplicate column" error for existing DBs
+		if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("migration failed: %w", err)
+		}
+	}
+
+	// Index for source filtering
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_source ON events(source)`)
+
+	return nil
 }
 
 // Log writes an event to the database (thread-safe)
@@ -82,10 +104,11 @@ func (w *Writer) Log(event *Event) error {
 	defer w.mu.Unlock()
 
 	_, err := w.db.Exec(`
-		INSERT INTO events (timestamp, request_id, state, worker_id, session_id, duration_ms, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO events (timestamp, request_id, state, worker_id, session_id, duration_ms, error, source, mcp_caller)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, event.Timestamp.UnixNano(), event.RequestID, event.State,
-		event.WorkerID, event.SessionID, event.DurationMs, event.Error)
+		event.WorkerID, event.SessionID, event.DurationMs, event.Error,
+		event.Source, event.MCPCaller)
 
 	return err
 }

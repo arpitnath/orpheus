@@ -276,11 +276,13 @@ func (pm *PoolManager) workerLoop(agentPool *AgentPool) {
 		}
 
 		// Log STARTED state (best-effort, async)
+		source := execlog.SourceHTTP
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
 			RequestID: req.ID,
 			State:     execlog.StateStarted,
 			WorkerID:  ptrString(worker.ID()),
 			SessionID: ptrOrNil(req.SessionID),
+			Source:    &source,
 		})
 
 		// Check if streaming requested (Phase 3)
@@ -315,6 +317,7 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 
 	// Log COMPLETED or FAILED state (best-effort, async)
 	// Check both err != nil AND result.Status != "success" to catch OOM/timeout
+	source := execlog.SourceHTTP
 	if err != nil || (result != nil && result.Status != "success") {
 		var errPtr *string
 		if err != nil {
@@ -328,6 +331,7 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
 			Error:      errPtr,
+			Source:     &source,
 		})
 	} else {
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
@@ -335,6 +339,7 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 			State:      execlog.StateCompleted,
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
+			Source:     &source,
 		})
 	}
 
@@ -365,6 +370,7 @@ func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.
 
 	// Log COMPLETED or FAILED state (best-effort, async)
 	// Check both err != nil AND result.Status != "success" to catch OOM/timeout
+	source := execlog.SourceHTTP
 	if err != nil || (result != nil && result.Status != "success") {
 		var errPtr *string
 		if err != nil {
@@ -378,6 +384,7 @@ func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
 			Error:      errPtr,
+			Source:     &source,
 		})
 	} else {
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
@@ -385,6 +392,7 @@ func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.
 			State:      execlog.StateCompleted,
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
+			Source:     &source,
 		})
 	}
 

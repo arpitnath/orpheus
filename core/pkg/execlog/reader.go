@@ -71,7 +71,7 @@ func (r *Reader) GetCrashedRequests() ([]*CrashedRequest, error) {
 
 // GetExecutionLogs returns filtered and paginated execution logs
 func (r *Reader) GetExecutionLogs(filters *ExecLogFilters) ([]*ExecLogEntry, error) {
-	query := `SELECT request_id, state, worker_id, session_id, timestamp, duration_ms, error
+	query := `SELECT request_id, state, worker_id, session_id, timestamp, duration_ms, error, source, mcp_caller
 	          FROM events WHERE 1=1`
 	args := []interface{}{}
 
@@ -87,6 +87,10 @@ func (r *Reader) GetExecutionLogs(filters *ExecLogFilters) ([]*ExecLogEntry, err
 	if filters.SessionID != "" {
 		query += ` AND session_id = ?`
 		args = append(args, filters.SessionID)
+	}
+	if filters.Source != "" {
+		query += ` AND source = ?`
+		args = append(args, filters.Source)
 	}
 	if filters.StartTime > 0 {
 		query += ` AND timestamp >= ?`
@@ -116,9 +120,10 @@ func (r *Reader) GetExecutionLogs(filters *ExecLogFilters) ([]*ExecLogEntry, err
 		var workerID, sessionID sql.NullString
 		var durationMs sql.NullInt64
 		var errorMsg sql.NullString
+		var source, mcpCaller sql.NullString
 
 		err := rows.Scan(&entry.RequestID, &entry.State, &workerID, &sessionID,
-			&entry.Timestamp, &durationMs, &errorMsg)
+			&entry.Timestamp, &durationMs, &errorMsg, &source, &mcpCaller)
 		if err != nil {
 			continue // Skip malformed rows
 		}
@@ -134,6 +139,12 @@ func (r *Reader) GetExecutionLogs(filters *ExecLogFilters) ([]*ExecLogEntry, err
 		}
 		if errorMsg.Valid {
 			entry.Error = &errorMsg.String
+		}
+		if source.Valid {
+			entry.Source = &source.String
+		}
+		if mcpCaller.Valid {
+			entry.MCPCaller = &mcpCaller.String
 		}
 
 		entries = append(entries, &entry)
@@ -159,6 +170,10 @@ func (r *Reader) GetExecutionLogsCount(filters *ExecLogFilters) (int, error) {
 	if filters.SessionID != "" {
 		query += ` AND session_id = ?`
 		args = append(args, filters.SessionID)
+	}
+	if filters.Source != "" {
+		query += ` AND source = ?`
+		args = append(args, filters.Source)
 	}
 	if filters.StartTime > 0 {
 		query += ` AND timestamp >= ?`
