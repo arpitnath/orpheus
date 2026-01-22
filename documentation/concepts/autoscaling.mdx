@@ -1,0 +1,52 @@
+---
+title: 'Autoscaling'
+description: 'How Orpheus scales based on queue depth'
+---
+
+## Queue-Depth Scaling
+
+Orpheus scales on actual demand: how many requests are waiting.
+
+Every 5 seconds:
+```
+utilization = (queued + processing) / workers
+
+If utilization > 3.0 → add worker
+If utilization < 0.5 → remove worker
+```
+
+## Why Not CPU-Based?
+
+AI agents spend most time waiting (for LLM APIs, databases, etc). CPU stays low even when busy.
+
+Queue-depth scaling adds workers when work piles up, regardless of CPU.
+
+## Example
+
+```
+10 requests arrive
+3 workers running
+Queue depth = 10
+
+utilization = 10/3 = 3.3
+3.3 > 3.0 → scale up
+
+New worker spawns
+4 workers now handle the load
+```
+
+## Configuration
+
+```yaml
+scaling:
+  min_workers: 1      # Floor
+  max_workers: 10     # Ceiling
+```
+
+## Monitor Scaling
+
+```bash
+orpheus stats my-agent
+```
+
+Shows queue depth and worker count in real-time.

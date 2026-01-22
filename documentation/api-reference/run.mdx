@@ -1,0 +1,79 @@
+---
+title: 'Run Agent'
+api: 'POST /v1/agents/{name}/run'
+description: 'Execute an agent'
+---
+
+## Request
+
+```http
+POST /v1/agents/{name}/run
+Content-Type: application/json
+
+{
+  "input": {
+    "query": "Your input here"
+  }
+}
+```
+
+## Headers
+
+| Header | Description |
+|--------|-------------|
+| `Content-Type` | `application/json` |
+| `X-Session-ID` | Optional. Route to same worker |
+| `Accept` | `text/event-stream` for SSE streaming |
+
+## cURL Example
+
+```bash
+curl -X POST http://localhost:7777/v1/agents/my-agent/run \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"query": "hello"}}'
+```
+
+**With session:**
+```bash
+curl -X POST http://localhost:7777/v1/agents/my-agent/run \
+  -H "Content-Type: application/json" \
+  -H "X-Session-ID: user-123" \
+  -d '{"input": {"query": "hello"}}'
+```
+
+## Response
+
+**Success (200):**
+```json
+{
+  "request_id": "abc-123-def",
+  "result": {
+    "response": "Hello!",
+    "status": "success"
+  },
+  "duration_ms": 45,
+  "worker_id": "my-agent-worker-1"
+}
+```
+
+**Error (500):**
+```json
+{
+  "request_id": "abc-123-def",
+  "error": "Handler raised exception",
+  "duration_ms": 12
+}
+```
+
+## CLI Equivalent
+
+```bash
+orpheus run my-agent '{"query": "hello"}'
+
+# With session
+orpheus run my-agent '{"query": "hello"}' --session user-123
+```
+
+<Card title="Next: ExecLog API" icon="list" href="/api-reference/execlog">
+  Query execution history →
+</Card>

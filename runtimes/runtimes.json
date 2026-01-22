@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "runtimes": {
+    "python": {
+      "display_name": "Python",
+      "default_version": "3.12",
+      "versions": {
+        "3.10": {
+          "containerfile": "python/3.10.Containerfile",
+          "interpreter": "/usr/bin/python3",
+          "package_installer": "/usr/bin/pip3",
+          "entrypoint_file": "_entrypoint.py",
+          "env": {
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "status": "supported"
+        },
+        "3.11": {
+          "containerfile": "python/3.11.Containerfile",
+          "interpreter": "/usr/bin/python3",
+          "package_installer": "/usr/bin/pip3",
+          "entrypoint_file": "_entrypoint.py",
+          "env": {
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "status": "supported"
+        },
+        "3.12": {
+          "containerfile": "python/3.12.Containerfile",
+          "interpreter": "/usr/bin/python3",
+          "package_installer": "/usr/bin/pip3",
+          "entrypoint_file": "_entrypoint.py",
+          "env": {
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "status": "supported"
+        }
+      },
+      "aliases": {
+        "python": "3.12",
+        "python3": "3.12",
+        "python3.10": "3.10",
+        "python3.11": "3.11",
+        "python3.12": "3.12",
+        "latest": "3.12",
+        "lts": "3.12"
+      },
+      "package_managers": {
+        "default": "pip",
+        "supported": {
+          "pip": {
+            "install_cmd": ["/usr/bin/pip3", "install", "-r", "/tmp/requirements.txt", "--target", "/packages", "--quiet", "--no-cache-dir"],
+            "lock_file": null,
+            "manifest_file": "requirements.txt"
+          },
+          "uv": {
+            "install_cmd": ["uv", "pip", "install", "-r", "/tmp/requirements.txt", "--target", "/packages", "--quiet"],
+            "lock_file": "uv.lock",
+            "manifest_file": "requirements.txt"
+          },
+          "poetry": {
+            "install_cmd": ["poetry", "install", "--no-dev", "--no-interaction"],
+            "lock_file": "poetry.lock",
+            "manifest_file": "pyproject.toml"
+          }
+        }
+      }
+    },
+    "nodejs": {
+      "display_name": "Node.js",
+      "default_version": "20",
+      "versions": {
+        "20": {
+          "containerfile": "nodejs/20.Containerfile",
+          "interpreter": "/usr/local/bin/node",
+          "package_installer": "/usr/local/bin/npm",
+          "entrypoint_file": "_entrypoint.mjs",
+          "env": {
+            "NODE_ENV": "production"
+          },
+          "status": "supported"
+        }
+      },
+      "aliases": {
+        "nodejs": "20",
+        "nodejs20": "20",
+        "node": "20",
+        "node20": "20",
+        "latest": "20",
+        "lts": "20"
+      },
+      "package_managers": {
+        "default": "npm",
+        "supported": {
+          "npm": {
+            "install_cmd": ["npm", "install", "--prefix", "/packages"],
+            "lock_file": "package-lock.json",
+            "manifest_file": "package.json"
+          },
+          "yarn": {
+            "install_cmd": ["yarn", "install", "--production", "--modules-folder", "/packages/node_modules"],
+            "lock_file": "yarn.lock",
+            "manifest_file": "package.json"
+          },
+          "pnpm": {
+            "install_cmd": ["pnpm", "install", "--prod"],
+            "lock_file": "pnpm-lock.yaml",
+            "manifest_file": "package.json"
+          }
+        }
+      }
+    }
+  }
+}

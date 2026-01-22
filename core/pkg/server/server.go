@@ -169,9 +169,7 @@ func (s *Server) setupRoutes() {
 
 	// MCP routes (if enabled)
 	if s.mcpEnabled && s.mcpManager != nil {
-		// Note: MCP handler doesn't have auth middleware yet in server mode
-		// Auth integration will be added when server.go gets auth support
-		mcpHandler := mcp.NewMCPHandler(s.mcpManager, nil, nil)
+		mcpHandler := mcp.NewMCPHandler(s.mcpManager)
 		s.mux.Handle("/mcp/", mcpHandler)
 		log.Printf("MCP endpoints enabled at /mcp/")
 	}

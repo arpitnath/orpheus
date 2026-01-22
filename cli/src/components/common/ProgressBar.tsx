@@ -24,7 +24,8 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
   colorByValue = false,
 }) => {
   const percent = max > 0 ? Math.round((value / max) * 100) : 0;
-  const filled = Math.round((percent / 100) * width);
+  // Clamp filled to [0, width] to prevent negative empty values
+  const filled = Math.min(Math.max(0, Math.round((percent / 100) * width)), width);
   const empty = width - filled;
   const color = getColor(percent, colorByValue);
 

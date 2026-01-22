@@ -15,11 +15,13 @@ import (
 	"sync"
 	"time"
 
-	"orpheus/daemon/pkg/auth"
 	"orpheus/daemon/pkg/execlog"
 	"orpheus/daemon/pkg/mcp"
 	"orpheus/daemon/pkg/registry"
+	"orpheus/daemon/pkg/runtime/downloader"
 	"orpheus/daemon/pkg/scaling"
+	"orpheus/daemon/pkg/service"
+	"orpheus/daemon/pkg/telemetry"
 )
 
 // Server is the orpheus daemon HTTP server.
@@ -30,10 +32,6 @@ type Server struct {
 	httpServer *http.Server
 	startTime  time.Time
 
-	// Authentication (for TCP endpoints)
-	authStore   *auth.Store
-	rateLimiter *auth.RateLimiter
-
 	// Agent registry (for discovery and env vars)
 	registry registry.Registry
 
@@ -41,9 +39,19 @@ type Server struct {
 	execlogDir string
 	retention  *execlog.Retention // ExecLog retention manager
 
+	// Model server management (ServiceManager)
+	serviceManager *service.Manager
+
+	// Runtime downloader (for Python/Node base images)
+	downloader *downloader.Downloader
+
 	// Autoscaling (NEW - integrates pkg/scaling)
 	poolManager *PoolManager
 	autoscaler  *scaling.BasicAutoscaler
+
+	// Telemetry (metrics collection and export)
+	telemetryRegistry *telemetry.DefaultRegistry
+	telemetryExporter *telemetry.PrometheusExporter
 
 	// Running agents (for status/kill endpoints)
 	running map[string]*RunningAgent
@@ -78,33 +86,6 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 		cancel:    cancel,
 	}
 
-	// Initialize auth if TCP is enabled
-	if config.TCP.Enabled {
-		// Determine database path
-		// Default: /var/lib/orpheus/keys.db or ~/.orpheus/keys.db
-		dbPath := "/var/lib/orpheus/keys.db"
-		if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
-			// Use home directory if /var/lib doesn't exist
-			home, _ := os.UserHomeDir()
-			dbPath = filepath.Join(home, ".orpheus", "keys.db")
-
-			// Ensure directory exists
-			os.MkdirAll(filepath.Dir(dbPath), 0755)
-		}
-
-		// Initialize auth store
-		store, err := auth.NewStore(dbPath)
-		if err != nil {
-			return nil, fmt.Errorf("init auth store: %w", err)
-		}
-		s.authStore = store
-
-		// Initialize rate limiter
-		s.rateLimiter = auth.NewRateLimiter()
-
-		log.Printf("Auth enabled: API keys database at %s", dbPath)
-	}
-
 	// Initialize agent registry
 	registryPath := "/var/lib/orpheus/registry"
 	if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
@@ -124,8 +105,24 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	s.autoscaler = autoscaler
 	log.Printf("Autoscaler initialized (interval: 5s)")
 
-	// Initialize pool manager
-	poolManager := NewPoolManager(reg, autoscaler, execlogDir, ctx)
+	// Initialize service manager (model server management)
+	serviceManager := service.NewManager()
+	s.serviceManager = serviceManager
+	log.Printf("ServiceManager initialized (platform-aware model management)")
+
+	// Initialize runtime downloader
+	runtimeCacheDir := "/var/lib/orpheus/runtimes"
+	if _, err := os.Stat("/var/lib/orpheus"); os.IsNotExist(err) {
+		home, _ := os.UserHomeDir()
+		runtimeCacheDir = filepath.Join(home, ".orpheus", "runtimes")
+	}
+	s.downloader = downloader.New(downloader.Config{
+		CacheDir: runtimeCacheDir,
+	})
+	log.Printf("Runtime downloader initialized (cache: %s)", runtimeCacheDir)
+
+	// Initialize pool manager (pass serviceManager for model server access)
+	poolManager := NewPoolManager(reg, autoscaler, execlogDir, serviceManager, ctx)
 	s.poolManager = poolManager
 	log.Printf("Pool manager initialized")
 
@@ -148,14 +145,37 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	mux.HandleFunc("/v1/execlog/stats", s.handleExecLogStats) // GET execution stats
 	mux.HandleFunc("/v1/execlog", s.handleExecLog)      // GET filtered execution logs
 
-	// Initialize MCP if TCP is enabled (MCP requires authenticated access)
-	if config.TCP.Enabled {
-		mcpGetter := NewDaemonServerGetter(s)
-		mcpManager := mcp.NewMCPServerManager(mcpGetter)
-		mcpHandler := mcp.NewMCPHandler(mcpManager, s.authStore, s.rateLimiter)
-		mux.Handle("/mcp/", mcpHandler)
-		log.Printf("MCP endpoints enabled at /mcp/")
+	// Initialize MCP endpoints
+	mcpGetter := NewDaemonServerGetter(s)
+	mcpManager := mcp.NewMCPServerManager(mcpGetter)
+	mcpHandler := mcp.NewMCPHandler(mcpManager)
+	mux.Handle("/mcp/", mcpHandler)
+	log.Printf("MCP endpoints enabled at /mcp/")
+
+	// Initialize telemetry system (Prometheus /metrics endpoint)
+	telemetryRegistry := telemetry.NewRegistry(&telemetry.NoOpIsolator{})
+
+	// Register collectors (wrap existing GetStats methods)
+	if err := telemetryRegistry.Register(NewPoolCollector(poolManager)); err != nil {
+		log.Printf("[telemetry] Warning: Failed to register PoolCollector: %v", err)
 	}
+	if err := telemetryRegistry.Register(NewQueueCollector(poolManager)); err != nil {
+		log.Printf("[telemetry] Warning: Failed to register QueueCollector: %v", err)
+	}
+	if err := telemetryRegistry.Register(NewExecLogCollector(reg, execlogDir, poolManager)); err != nil {
+		log.Printf("[telemetry] Warning: Failed to register ExecLogCollector: %v", err)
+	}
+	if err := telemetryRegistry.Register(NewServiceCollector(serviceManager)); err != nil {
+		log.Printf("[telemetry] Warning: Failed to register ServiceCollector: %v", err)
+	}
+
+	// Create exporter and mount /metrics endpoint
+	telemetryExporter := telemetry.NewPrometheusExporter(telemetryRegistry)
+	mux.Handle("/metrics", telemetryExporter)
+	log.Printf("Telemetry /metrics endpoint enabled (Prometheus format)")
+
+	s.telemetryRegistry = telemetryRegistry
+	s.telemetryExporter = telemetryExporter
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
@@ -186,6 +206,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		if err := s.retention.Start(s.ctx); err != nil {
 			return fmt.Errorf("start retention: %w", err)
 		}
+	}
+
+	// Start service manager (model server management)
+	if s.serviceManager != nil {
+		if err := s.serviceManager.Start(s.ctx); err != nil {
+			return fmt.Errorf("start service manager: %w", err)
+		}
+		log.Printf("ServiceManager started")
 	}
 
 	errChan := make(chan error, 2)
@@ -228,15 +256,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			log.Printf("WARNING: Consider enabling TLS or binding to 127.0.0.1 for local-only access")
 		}
 
-		// Serve TCP WITH auth middleware (network untrusted)
-		authHandler := auth.AuthMiddleware(s.authStore, s.rateLimiter)(s.httpServer.Handler)
+		// Serve TCP (no auth for OSS - same handler as Unix socket)
 		tcpServer := &http.Server{
-			Handler:      authHandler,
+			Handler:      s.httpServer.Handler,
 			ReadTimeout:  s.httpServer.ReadTimeout,
 			WriteTimeout: s.httpServer.WriteTimeout,
 		}
-
-		log.Printf("Auth enabled for TCP endpoints (Unix socket remains unauthenticated)")
 
 		go func() {
 			errChan <- tcpServer.Serve(listener)
@@ -337,6 +362,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.retention != nil {
 		if err := s.retention.Stop(); err != nil {
 			log.Printf("Error stopping retention: %v", err)
+		}
+	}
+
+	// Stop service manager (model servers)
+	if s.serviceManager != nil {
+		if err := s.serviceManager.Stop(ctx); err != nil {
+			log.Printf("Error stopping service manager: %v", err)
 		}
 	}
 

@@ -15,6 +15,8 @@ import (
 	"orpheus/daemon/pkg/execlog"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/scaling"
+	"orpheus/daemon/pkg/service"
+	"orpheus/daemon/pkg/telemetry"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,12 +41,17 @@ type AgentPool struct {
 // PoolManager manages autoscaling pools for all deployed agents.
 // It creates pools on-demand when agents are deployed via the registry.
 type PoolManager struct {
-	registry   registry.Registry
-	autoscaler *scaling.BasicAutoscaler
-	execlogDir string // ExecLog directory for logging
+	registry       registry.Registry
+	autoscaler     *scaling.BasicAutoscaler
+	execlogDir     string           // ExecLog directory for logging
+	serviceManager *service.Manager // Model server management
 
 	pools map[string]*AgentPool // agentName → pool
 	mu    sync.RWMutex
+
+	// Per-agent telemetry labels (agent name → custom labels)
+	agentLabels   map[string][]telemetry.Label
+	agentLabelsMu sync.RWMutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -52,15 +59,17 @@ type PoolManager struct {
 }
 
 // NewPoolManager creates a new pool manager.
-func NewPoolManager(registry registry.Registry, autoscaler *scaling.BasicAutoscaler, execlogDir string, ctx context.Context) *PoolManager {
+func NewPoolManager(registry registry.Registry, autoscaler *scaling.BasicAutoscaler, execlogDir string, serviceManager *service.Manager, ctx context.Context) *PoolManager {
 	ctx, cancel := context.WithCancel(ctx)
 	return &PoolManager{
-		execlogDir: execlogDir,
-		registry:   registry,
-		autoscaler: autoscaler,
-		pools:      make(map[string]*AgentPool),
-		ctx:        ctx,
-		cancel:     cancel,
+		execlogDir:     execlogDir,
+		registry:       registry,
+		autoscaler:     autoscaler,
+		serviceManager: serviceManager,
+		pools:          make(map[string]*AgentPool),
+		agentLabels:    make(map[string][]telemetry.Label),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 
@@ -87,8 +96,8 @@ func (pm *PoolManager) CreatePool(agentName string) error {
 	// Create queue
 	queue := scaling.NewRequestQueue(agentName, queueSize)
 
-	// Create spawner
-	spawner := NewDaemonWorkerSpawner(agentName, agent.Path, agent.ResolvedEnv)
+	// Create spawner (pass serviceManager for model server access)
+	spawner := NewDaemonWorkerSpawner(agentName, agent.Path, agent.ResolvedEnv, pm.serviceManager)
 
 	// Create pool
 	pool := scaling.NewWorkerPool(agentName, spawner, policy)
@@ -98,6 +107,21 @@ func (pm *PoolManager) CreatePool(agentName string) error {
 
 	// Load session affinity config from agent.yaml
 	sessionConfig := pm.loadSessionConfig(agent.Path)
+
+	// Load telemetry config and store custom labels
+	telemetryConfig := pm.loadTelemetryConfig(agent.Path)
+	if telemetryConfig.IsEnabled() && len(telemetryConfig.Labels) > 0 {
+		pm.agentLabelsMu.Lock()
+		labels := make([]telemetry.Label, 0, len(telemetryConfig.Labels))
+		for k, v := range telemetryConfig.Labels {
+			labels = append(labels, telemetry.Label{Key: k, Value: v})
+		}
+		pm.agentLabels[agentName] = labels
+		pm.agentLabelsMu.Unlock()
+
+		log.Printf("[pool-manager] Agent '%s' has %d custom telemetry labels",
+			agentName, len(labels))
+	}
 
 	agentPool := &AgentPool{
 		agentName:     agentName,
@@ -114,13 +138,14 @@ func (pm *PoolManager) CreatePool(agentName string) error {
 	pm.autoscaler.RegisterPool(agentName, pool, policy)
 	pm.autoscaler.RegisterQueueMetrics(agentName, queue)
 
-	// Start worker loops (initial workers = minWorkers)
-	numWorkers := policy.MinWorkers
-	if numWorkers < 1 {
-		numWorkers = 1
+	// Start worker loops (need MaxWorkers goroutines for full concurrency)
+	// Each goroutine can independently dequeue and dispatch work
+	numLoops := policy.MaxWorkers
+	if numLoops < 1 {
+		numLoops = 1
 	}
 
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < numLoops; i++ {
 		pm.wg.Add(1)
 		go pm.workerLoop(agentPool)
 	}
@@ -156,6 +181,11 @@ func (pm *PoolManager) RemovePool(agentName string) error {
 	delete(pm.pools, agentName)
 	pm.mu.Unlock()
 
+	// Clean up telemetry labels
+	pm.agentLabelsMu.Lock()
+	delete(pm.agentLabels, agentName)
+	pm.agentLabelsMu.Unlock()
+
 	log.Printf("[pool-manager] Removing pool for '%s'", agentName)
 
 	// Unregister from autoscaler
@@ -180,6 +210,34 @@ func (pm *PoolManager) RemovePool(agentName string) error {
 
 	log.Printf("[pool-manager] Removed pool for '%s'", agentName)
 	return nil
+}
+
+// GetAllPools returns a copy of all agent pools (for telemetry/monitoring).
+// Returns a map of agentName → AgentPool.
+func (pm *PoolManager) GetAllPools() map[string]*AgentPool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	pools := make(map[string]*AgentPool, len(pm.pools))
+	for name, pool := range pm.pools {
+		pools[name] = pool
+	}
+	return pools
+}
+
+// Registry returns the agent registry (for telemetry to list agents).
+func (pm *PoolManager) Registry() registry.Registry {
+	return pm.registry
+}
+
+// GetPoolStats returns worker pool statistics (for telemetry).
+func (ap *AgentPool) GetPoolStats() scaling.PoolStats {
+	return ap.pool.GetStats()
+}
+
+// GetQueueStats returns request queue statistics (for telemetry).
+func (ap *AgentPool) GetQueueStats() scaling.QueueStats {
+	return ap.queue.GetStats()
 }
 
 // workerLoop processes requests from an agent pool's queue.
@@ -255,6 +313,31 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 	// Return worker to pool
 	agentPool.pool.ReturnWorker(worker)
 
+	// Log COMPLETED or FAILED state (best-effort, async)
+	// Check both err != nil AND result.Status != "success" to catch OOM/timeout
+	if err != nil || (result != nil && result.Status != "success") {
+		var errPtr *string
+		if err != nil {
+			errPtr = ptrString(err.Error())
+		} else if result != nil && result.Error != "" {
+			errPtr = ptrString(result.Error)
+		}
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateFailed,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+			Error:      errPtr,
+		})
+	} else {
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateCompleted,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+		})
+	}
+
 	// Send final response
 	req.ResponseCh <- &scaling.Response{
 		Result:   result,
@@ -281,13 +364,20 @@ func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.
 	agentPool.pool.ReturnWorker(worker)
 
 	// Log COMPLETED or FAILED state (best-effort, async)
-	if err != nil {
+	// Check both err != nil AND result.Status != "success" to catch OOM/timeout
+	if err != nil || (result != nil && result.Status != "success") {
+		var errPtr *string
+		if err != nil {
+			errPtr = ptrString(err.Error())
+		} else if result != nil && result.Error != "" {
+			errPtr = ptrString(result.Error)
+		}
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
 			RequestID:  req.ID,
 			State:      execlog.StateFailed,
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
-			Error:      ptrString(err.Error()),
+			Error:      errPtr,
 		})
 	} else {
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
@@ -525,6 +615,36 @@ func (pm *PoolManager) loadSessionConfig(agentPath string) config.SessionConfig 
 	return sessionConfig
 }
 
+// loadTelemetryConfig loads telemetry configuration from agent.yaml.
+func (pm *PoolManager) loadTelemetryConfig(agentPath string) config.TelemetryConfig {
+	telemetryConfig := config.TelemetryConfig{}
+
+	agentYAML := filepath.Join(agentPath, "agent.yaml")
+	if _, err := os.Stat(agentYAML); err == nil {
+		data, readErr := os.ReadFile(agentYAML)
+		if readErr == nil {
+			var agentCfg struct {
+				Telemetry config.TelemetryConfig `yaml:"telemetry"`
+			}
+
+			if yamlErr := yaml.Unmarshal(data, &agentCfg); yamlErr == nil {
+				telemetryConfig = agentCfg.Telemetry
+			}
+		}
+	}
+
+	telemetryConfig.SetDefaults()
+	return telemetryConfig
+}
+
+// GetLabelsForAgent returns custom telemetry labels for an agent.
+// Returns nil if no custom labels are configured.
+func (pm *PoolManager) GetLabelsForAgent(agentName string) []telemetry.Label {
+	pm.agentLabelsMu.RLock()
+	defer pm.agentLabelsMu.RUnlock()
+	return pm.agentLabels[agentName]
+}
+
 // validateScalingConfig validates a scaling configuration against OSS safety limits.
 func validateScalingConfig(policy scaling.ScalingPolicy, queueSize int) error {
 	// Worker bounds
@@ -586,18 +706,20 @@ func validateScalingConfig(policy scaling.ScalingPolicy, queueSize int) error {
 
 // DaemonWorkerSpawner creates workers that execute via daemon's Execute() function.
 type DaemonWorkerSpawner struct {
-	agentName   string
-	agentPath   string
-	resolvedEnv []string
-	counter     atomic.Int64
+	agentName      string
+	agentPath      string
+	resolvedEnv    []string
+	serviceManager *service.Manager // Model server management
+	counter        atomic.Int64
 }
 
 // NewDaemonWorkerSpawner creates a new spawner for daemon-based workers.
-func NewDaemonWorkerSpawner(agentName, agentPath string, resolvedEnv []string) *DaemonWorkerSpawner {
+func NewDaemonWorkerSpawner(agentName, agentPath string, resolvedEnv []string, serviceManager *service.Manager) *DaemonWorkerSpawner {
 	return &DaemonWorkerSpawner{
-		agentName:   agentName,
-		agentPath:   agentPath,
-		resolvedEnv: resolvedEnv,
+		agentName:      agentName,
+		agentPath:      agentPath,
+		resolvedEnv:    resolvedEnv,
+		serviceManager: serviceManager,
 	}
 }
 
@@ -607,12 +729,13 @@ func (s *DaemonWorkerSpawner) SpawnWorker(ctx context.Context, agentID string) (
 	count := s.counter.Add(1)
 	workerID := fmt.Sprintf("%s-worker-%d", agentID, count)
 
-	// Create worker
+	// Create worker (pass serviceManager for model server access)
 	worker := &DaemonWorker{
-		id:          workerID,
-		agentID:     agentID,
-		agentPath:   s.agentPath,
-		resolvedEnv: s.resolvedEnv,
+		id:             workerID,
+		agentID:        agentID,
+		agentPath:      s.agentPath,
+		resolvedEnv:    s.resolvedEnv,
+		serviceManager: s.serviceManager,
 	}
 
 	// Initialize state
@@ -634,10 +757,11 @@ func (s *DaemonWorkerSpawner) KillWorker(ctx context.Context, workerID string) e
 
 // DaemonWorker implements scaling.Worker by wrapping daemon's Execute() function.
 type DaemonWorker struct {
-	id          string
-	agentID     string
-	agentPath   string
-	resolvedEnv []string
+	id             string
+	agentID        string
+	agentPath      string
+	resolvedEnv    []string
+	serviceManager *service.Manager // Model server management
 
 	lastUsed            atomic.Int64 // Unix nano timestamp
 	idle                atomic.Bool  // Currently idle
@@ -723,8 +847,8 @@ func (w *DaemonWorker) Execute(ctx context.Context, input []byte) (*scaling.Resu
 		Env:       envMap,
 	}
 
-	// Execute using daemon's existing infrastructure
-	result, err := Execute(ctx, req)
+	// Execute using daemon's existing infrastructure (pass serviceManager for model server)
+	result, err := Execute(ctx, req, w.serviceManager)
 	if err != nil {
 		// Track failure
 		w.trackFailure()
@@ -806,8 +930,8 @@ func (w *DaemonWorker) ExecuteStreaming(ctx context.Context, input []byte, strea
 	// Create stream adapter: runtime.StreamWriter → chan *scaling.StreamEvent
 	streamWriter := newChannelStreamWriter(streamCh)
 
-	// Execute using daemon's ExecuteStreaming infrastructure
-	result, err := ExecuteStreaming(ctx, req, streamWriter)
+	// Execute using daemon's ExecuteStreaming infrastructure (pass serviceManager for model server)
+	result, err := ExecuteStreaming(ctx, req, streamWriter, w.serviceManager)
 	if err != nil {
 		// Track failure
 		w.trackFailure()

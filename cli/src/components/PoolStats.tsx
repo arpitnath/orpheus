@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text, useApp } from 'ink';
 import { useStats, useRefreshAndQuit } from '../hooks/index.js';
-import { Spinner, ErrorBox, WorkerDots, ProgressBar, Row, RefreshHint } from './common/index.js';
+import { Spinner, ErrorBox, WorkerDots, Row, RefreshHint } from './common/index.js';
 import type { AgentStats, GlobalStats } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -26,14 +26,16 @@ const QueueText: React.FC<QueueTextProps> = ({ pending }) => {
   return <Text color="red">{pending}</Text>;
 };
 
-interface UtilTextProps {
+interface ReqPerWorkerProps {
   util: number;
 }
 
-const UtilText: React.FC<UtilTextProps> = ({ util }) => {
-  // Color-code utilization
-  const color = util < 60 ? 'green' : util < 80 ? 'yellow' : 'red';
-  return <Text color={color}>{util.toFixed(0)}%</Text>;
+const ReqPerWorker: React.FC<ReqPerWorkerProps> = ({ util }) => {
+  // Convert percentage to ratio (100% = 1.0 req/worker)
+  const ratio = util / 100;
+  // Color-code: green < 1, yellow 1-3, red > 3
+  const color = ratio < 1 ? 'green' : ratio < 3 ? 'yellow' : 'red';
+  return <Text color={color}>{ratio.toFixed(1)}</Text>;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,10 +125,8 @@ const SingleAgentStats: React.FC<SingleAgentStatsProps> = ({ agent }) => {
           }
         />
         <Box>
-          <Text dimColor>{'Utilization'.padEnd(18)}</Text>
-          <ProgressBar value={util} max={100} width={16} colorByValue />
-          <Text>  </Text>
-          <UtilText util={util} />
+          <Text dimColor>{'Req/Worker'.padEnd(18)}</Text>
+          <ReqPerWorker util={util} />
         </Box>
       </Box>
       <RefreshHint />
@@ -164,7 +164,7 @@ const AgentRow: React.FC<AgentRowProps> = ({ agent }) => {
       <Box width={10}>
         <QueueText pending={pending} />
       </Box>
-      <UtilText util={util} />
+      <ReqPerWorker util={util} />
     </Box>
   );
 };
@@ -191,7 +191,7 @@ const TotalRow: React.FC<TotalRowProps> = ({ agents }) => {
       <Box width={10}>
         <QueueText pending={totalPending} />
       </Box>
-      <UtilText util={avgUtil} />
+      <ReqPerWorker util={avgUtil} />
     </Box>
   );
 };
@@ -230,10 +230,8 @@ const MultiAgentStats: React.FC<MultiAgentStatsProps> = ({ global, agents }) => 
           }
         />
         <Box>
-          <Text dimColor>{'Utilization'.padEnd(18)}</Text>
-          <ProgressBar value={global.average_utilization} max={100} width={16} colorByValue />
-          <Text>  </Text>
-          <UtilText util={global.average_utilization} />
+          <Text dimColor>{'Req/Worker'.padEnd(18)}</Text>
+          <ReqPerWorker util={global.average_utilization} />
         </Box>
       </Box>
 
@@ -246,7 +244,7 @@ const MultiAgentStats: React.FC<MultiAgentStatsProps> = ({ global, agents }) => 
           <Text dimColor>{'AGENT'.padEnd(26)}</Text>
           <Text dimColor>{'WORKERS'.padEnd(22)}</Text>
           <Text dimColor>{'QUEUE'.padEnd(10)}</Text>
-          <Text dimColor>UTIL</Text>
+          <Text dimColor>REQ/W</Text>
         </Box>
         <Text dimColor>{'─'.repeat(65)}</Text>
         {/* Rows */}

@@ -1,7 +1,0 @@
-name: simple-agent
-runtime: python3
-module: agent
-entrypoint: handler
-
-memory: 256
-timeout: 30

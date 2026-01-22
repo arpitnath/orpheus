@@ -1,8 +1,0 @@
-name: planning-agent
-runtime: python3
-module: planning_agent
-entrypoint: run_workflow
-input_type: WorkflowInput
-
-memory: 512
-timeout: 120

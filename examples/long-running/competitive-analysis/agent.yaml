@@ -1,0 +1,24 @@
+name: competitive-analysis
+runtime: python3
+module: agent
+entrypoint: handler
+
+# Resource allocation
+memory: 1024
+timeout: 600  # 10 minutes - critical for long workflow
+
+# Environment variables
+env:
+  - OPENAI_API_KEY=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
+  - ANTHROPIC_API_KEY=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
+
+# Scaling configuration
+scaling:
+  min_workers: 1
+  max_workers: 5
+  target_utilization: 1.5
+  scale_up_threshold: 2.0
+  scale_down_threshold: 0.3
+  scale_up_delay: "20s"
+  scale_down_delay: "60s"
+  queue_size: 10

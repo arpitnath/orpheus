@@ -1,0 +1,135 @@
+---
+title: 'Use Sessions for Stateful Agents'
+description: 'Route same user to same worker for conversational agents'
+---
+
+Sessions let you build agents that remember context within a conversation.
+
+## The Problem
+
+Without sessions, each request might hit a different worker:
+- Request 1 → Worker A (loads user context)
+- Request 2 → Worker B (no context, starts fresh)
+
+With sessions, same user always hits same worker:
+- Request 1 → Worker A (loads user context)
+- Request 2 → Worker A (context already loaded)
+
+## Enable Sessions
+
+Add a session ID to your requests:
+
+**CLI:**
+```bash
+orpheus run my-agent '{"query": "step 1"}' --session user-123
+orpheus run my-agent '{"query": "step 2"}' --session user-123
+```
+
+**HTTP:**
+```bash
+curl -X POST http://localhost:7777/v1/agents/my-agent/run \
+  -H "Content-Type: application/json" \
+  -H "X-Session-ID: user-123" \
+  -d '{"input": {"query": "step 1"}}'
+```
+
+## Example: Conversational Agent
+
+```python
+# In-memory conversation history (per worker)
+conversations = {}
+
+def handler(input_data):
+    session_id = input_data.get('session_id', 'default')
+    query = input_data.get('query', '')
+
+    # Get or create conversation
+    if session_id not in conversations:
+        conversations[session_id] = []
+
+    history = conversations[session_id]
+
+    # Add user message
+    history.append({"role": "user", "content": query})
+
+    # Generate response (your LLM call here)
+    response = generate_response(history)
+
+    # Add assistant message
+    history.append({"role": "assistant", "content": response})
+
+    return {
+        'response': response,
+        'turn': len(history) // 2
+    }
+
+def generate_response(history):
+    # Replace with your LLM API call
+    return f"Response to turn {len(history) // 2}"
+```
+
+## Test Session Affinity
+
+```bash
+# First request
+orpheus run my-agent '{"query": "My name is Alice"}' --session alice
+
+# Second request (same worker, has context)
+orpheus run my-agent '{"query": "What is my name?"}' --session alice
+```
+
+## Session + Workspace
+
+For durable state (survives worker restarts), combine sessions with workspace:
+
+```python
+import json
+import os
+
+def handler(input_data):
+    session_id = input_data.get('session_id', 'default')
+
+    # Load from workspace (durable)
+    history_file = f'/workspace/sessions/{session_id}.json'
+
+    if os.path.exists(history_file):
+        with open(history_file) as f:
+            history = json.load(f)
+    else:
+        history = []
+
+    # ... process request ...
+
+    # Save to workspace
+    os.makedirs('/workspace/sessions', exist_ok=True)
+    with open(history_file, 'w') as f:
+        json.dump(history, f)
+
+    return {'response': response}
+```
+
+## How It Works
+
+1. Request arrives with `session_id`
+2. Orpheus checks if a worker handled this session before
+3. If yes → route to that worker
+4. If no → pick any available worker, remember the mapping
+
+## Limitations
+
+- **Best-effort:** If preferred worker is busy, request goes to another
+- **Worker death:** If worker dies, next request gets new worker
+- **Single machine:** Session mappings are local (not distributed)
+
+## When to Use Sessions
+
+| Use Case | Session Needed? |
+|----------|-----------------|
+| Conversational agent | Yes |
+| Multi-step workflow | Yes |
+| Stateless API calls | No |
+| One-off tasks | No |
+
+<Card title="Next: Workspace Persistence" icon="database" href="/guides/workspace-persistence">
+  Make state survive worker restarts →
+</Card>

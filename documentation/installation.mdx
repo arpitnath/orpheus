@@ -1,0 +1,155 @@
+---
+title: 'Installation'
+description: 'Install Orpheus daemon and CLI'
+---
+
+## System Requirements
+
+- **macOS**: 12.0+ (Apple Silicon or Intel)
+- **Linux**: Ubuntu 20.04+, Debian 11+, or any systemd-based distro
+- **Memory**: 2GB+ recommended
+- **Disk**: 5GB for runtime images
+
+## Install the Daemon
+
+<Tabs>
+  <Tab title="macOS">
+    <Steps>
+      <Step title="Start Lima VM">
+        Orpheus runs in a Lima VM on macOS for Linux compatibility:
+        ```bash
+        orpheus vm start
+        ```
+        This downloads and starts the Orpheus VM (~5 minutes first time).
+      </Step>
+
+      <Step title="Verify Running">
+        ```bash
+        orpheus status
+        ```
+        Should show: ✓ healthy
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Linux">
+    <Steps>
+      <Step title="Download Binary">
+        ```bash
+        # Download latest release
+        wget https://github.com/zoops-ai/orpheus/releases/latest/download/orpheusd-linux-amd64
+        chmod +x orpheusd-linux-amd64
+        sudo mv orpheusd-linux-amd64 /usr/local/bin/orpheusd
+        ```
+      </Step>
+
+      <Step title="Start Daemon">
+        ```bash
+        # Via systemd (recommended)
+        sudo systemctl enable orpheusd
+        sudo systemctl start orpheusd
+
+        # Or run directly
+        orpheusd start
+        ```
+      </Step>
+
+      <Step title="Verify Running">
+        ```bash
+        orpheus status
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="From Source">
+    <Steps>
+      <Step title="Clone Repository">
+        ```bash
+        git clone https://github.com/zoops-ai/orpheus.git
+        cd orpheus
+        ```
+      </Step>
+
+      <Step title="Build Daemon">
+        Requires Go 1.20+:
+        ```bash
+        make build
+        ```
+        Output: `bin/orpheusd`
+      </Step>
+
+      <Step title="Start Daemon">
+        ```bash
+        ./bin/orpheusd start
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Install the CLI
+
+The Orpheus CLI lets you deploy and manage agents:
+
+```bash
+npm install -g @orpheus/cli
+```
+
+**Verify installation:**
+```bash
+orpheus --version
+```
+
+## Verify Installation
+
+<Check>Run the healthcheck command:</Check>
+
+```bash
+orpheus healthcheck
+```
+
+**Expected output:**
+```
+✓ Daemon running
+✓ Worker pools healthy
+✓ Storage accessible
+```
+
+## Next Steps
+
+<Card
+  title="Deploy Your First Agent"
+  icon="rocket"
+  href="/quickstart"
+>
+  Follow the quick start guide →
+</Card>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Daemon won't start">
+    **Check if port 7777 is in use:**
+    ```bash
+    lsof -i :7777
+    ```
+    **Kill conflicting process or change port in config.**
+  </Accordion>
+
+  <Accordion title="Permission denied">
+    **On Linux, you may need sudo:**
+    ```bash
+    sudo orpheusd start
+    ```
+    Or add your user to the orpheus group.
+  </Accordion>
+
+  <Accordion title="VM won't start on macOS">
+    **Install Lima first:**
+    ```bash
+    brew install lima
+    ```
+    Then retry `orpheus vm start`.
+  </Accordion>
+</AccordionGroup>

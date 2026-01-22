@@ -8,15 +8,19 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"orpheus/daemon/pkg/config"
 	"orpheus/daemon/pkg/execlog"
+	"orpheus/daemon/pkg/proxy"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/runtime"
 	"orpheus/daemon/pkg/scaling"
+
 	"github.com/google/uuid"
-	"strconv"
+	"gopkg.in/yaml.v3"
 )
 
 // handleAgentResource routes RESTful agent requests based on path.
@@ -221,6 +225,31 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 		return
 	}
 
+	// Generate request ID for execlog tracking
+	requestID := uuid.New().String()
+
+	// Helper to log execlog events (best-effort, non-blocking for QUEUED)
+	logExecEvent := func(state string, durationMs *int64, errMsg *string) {
+		writer, err := execlog.NewWriter(s.execlogDir, agent.Name)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		event := &execlog.Event{
+			Timestamp:  time.Now(),
+			RequestID:  requestID,
+			State:      state,
+			DurationMs: durationMs,
+			Error:      errMsg,
+		}
+		if err := writer.Log(event); err != nil {
+			log.Printf("Warning: Failed to log %s: %v", state, err)
+		}
+	}
+
+	// Log QUEUED state (async, best-effort)
+	go logExecEvent(execlog.StateQueued, nil, nil)
+
 	// Build full RunRequest using stored agent metadata
 	fullReq := &RunRequest{
 		AgentPath: agent.Path,
@@ -246,17 +275,39 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 		fullReq.Env[k] = v
 	}
 
-	// Execute using existing flow
+	// Log STARTED state and track execution time
+	logExecEvent(execlog.StateStarted, nil, nil)
+	startTime := time.Now()
+
+	// Execute using existing flow (pass ServiceManager for model server management)
 	ctx := r.Context()
-	result, err := Execute(ctx, fullReq)
-	if err != nil {
+	result, err := Execute(ctx, fullReq, s.serviceManager)
+
+	// Calculate duration
+	durationMs := time.Since(startTime).Milliseconds()
+
+	// Log COMPLETED or FAILED state
+	// Check both err != nil AND result.Status != success to catch OOM/timeout
+	if err != nil || result.Status != proxy.StatusSuccess {
+		// Log FAILED state
+		var errStr string
+		if err != nil {
+			errStr = err.Error()
+		} else if result.Error != "" {
+			errStr = result.Error
+		}
+		logExecEvent(execlog.StateFailed, &durationMs, &errStr)
+
 		writeJSON(w, http.StatusOK, RunResponse{
 			Status:     "error",
-			Error:      err.Error(),
-			DurationMs: 0,
+			Error:      errStr,
+			DurationMs: durationMs,
 		})
 		return
 	}
+
+	// Log COMPLETED state
+	logExecEvent(execlog.StateCompleted, &durationMs, nil)
 
 	// Convert proxy.Result to RunResponse
 	resp := RunResponse{
@@ -317,6 +368,24 @@ func (s *Server) executeViaPoolStreaming(w http.ResponseWriter, r *http.Request,
 		StreamCh:   streamCh,    // Enable streaming
 		SessionID:  sessionID,   // Session affinity (Phase 2)
 	}
+
+	// Log QUEUED state (best-effort, async)
+	go func() {
+		writer, err := execlog.NewWriter(s.execlogDir, agentName)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		err = writer.Log(&execlog.Event{
+			Timestamp: time.Now(),
+			RequestID: scalingReq.ID,
+			State:     execlog.StateQueued,
+			SessionID: ptrOrNil(scalingReq.SessionID),
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to log QUEUED: %v", err)
+		}
+	}()
 
 	// Enqueue request
 	if err := pool.queue.Enqueue(r.Context(), scalingReq); err != nil {
@@ -390,6 +459,31 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Generate request ID for execlog tracking
+	requestID := uuid.New().String()
+
+	// Helper to log execlog events (best-effort)
+	logExecEvent := func(state string, durationMs *int64, errMsg *string) {
+		writer, err := execlog.NewWriter(s.execlogDir, agent.Name)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		event := &execlog.Event{
+			Timestamp:  time.Now(),
+			RequestID:  requestID,
+			State:      state,
+			DurationMs: durationMs,
+			Error:      errMsg,
+		}
+		if err := writer.Log(event); err != nil {
+			log.Printf("Warning: Failed to log %s: %v", state, err)
+		}
+	}
+
+	// Log QUEUED state (async, best-effort)
+	go logExecEvent(execlog.StateQueued, nil, nil)
+
 	// Create SSE writer and verify streaming is supported
 	sseWriter := runtime.NewSSEWriter(w)
 	if sseWriter == nil {
@@ -404,7 +498,7 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
 
-	// Generate agent ID
+	// Generate agent ID (for running agent tracking, separate from request ID)
 	agentID := fmt.Sprintf("agent-%s", uuid.New().String()[:8])
 
 	// Send init event
@@ -463,16 +557,33 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		fullReq.Env[k] = v
 	}
 
-	// Execute agent with streaming
-	result, err := ExecuteStreaming(ctx, fullReq, sseWriter)
+	// Log STARTED state and track execution time
+	logExecEvent(execlog.StateStarted, nil, nil)
+	startTime := time.Now()
+
+	// Execute agent with streaming (pass ServiceManager for model server management)
+	result, err := ExecuteStreaming(ctx, fullReq, sseWriter, s.serviceManager)
+
+	// Calculate duration
+	durationMs := time.Since(startTime).Milliseconds()
 
 	// Send error event if execution failed
-	if err != nil {
+	// Check both err != nil AND result.Status != success to catch OOM/timeout
+	if err != nil || result.Status != proxy.StatusSuccess {
+		// Log FAILED state
+		var errStr string
+		if err != nil {
+			errStr = err.Error()
+		} else if result.Error != "" {
+			errStr = result.Error
+		}
+		logExecEvent(execlog.StateFailed, &durationMs, &errStr)
+
 		sseWriter.WriteEvent(&runtime.StreamEvent{
 			Type:      "error",
 			Timestamp: time.Now(),
 			Data: map[string]interface{}{
-				"error":       err.Error(),
+				"error":       errStr,
 				"duration_ms": time.Since(runningAgent.StartedAt).Milliseconds(),
 			},
 		})
@@ -486,6 +597,9 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
+
+	// Log COMPLETED state
+	logExecEvent(execlog.StateCompleted, &durationMs, nil)
 
 	// Send completed event with final result
 	sseWriter.WriteEvent(&runtime.StreamEvent{
@@ -532,15 +646,121 @@ func (s *Server) handleGetAgentByName(w http.ResponseWriter, agentName string) {
 		return
 	}
 
-	// Return agent details (without exposing full env var values)
+	// Build response with basic registry data
 	response := map[string]interface{}{
 		"name":       agent.Name,
+		"runtime":    agent.Runtime,
 		"created_at": agent.CreatedAt,
 		"updated_at": agent.UpdatedAt,
 		"env_vars":   extractEnvKeys(agent.ResolvedEnv), // Just keys, not values
 	}
 
+	// Load full agent config from agent.yaml to get additional fields
+	agentCfg, cfgErr := config.Load(agent.Path)
+	if cfgErr == nil {
+		// Add fields from agent.yaml
+		response["module"] = agentCfg.Module
+		response["entrypoint"] = agentCfg.Entrypoint
+
+		// Memory and timeout
+		if agentCfg.Memory > 0 {
+			response["memory"] = agentCfg.Memory
+		}
+		if agentCfg.TimeoutSec > 0 {
+			response["timeout"] = agentCfg.TimeoutSec
+		}
+
+		// Model/Engine (ServiceManager integration)
+		if agentCfg.Model != "" {
+			response["model"] = agentCfg.Model
+		}
+		if agentCfg.Engine != "" {
+			response["engine"] = agentCfg.Engine
+		}
+
+		// Session config
+		if agentCfg.Session.Enabled {
+			response["session"] = map[string]interface{}{
+				"enabled":      agentCfg.Session.Enabled,
+				"key":          agentCfg.Session.Key,
+				"ttl":          agentCfg.Session.TTL.String(),
+				"wait_timeout": agentCfg.Session.WaitTimeout.String(),
+			}
+		}
+
+		// Telemetry config (custom labels)
+		if len(agentCfg.Telemetry.Labels) > 0 {
+			response["telemetry"] = map[string]interface{}{
+				"enabled": agentCfg.Telemetry.IsEnabled(),
+				"labels":  agentCfg.Telemetry.Labels,
+			}
+		}
+	}
+
+	// Load scaling config separately (same pattern as pool_manager)
+	scalingCfg := s.loadAgentScalingConfig(agent.Path)
+	if scalingCfg != nil {
+		response["scaling"] = scalingCfg
+	}
+
 	writeJSON(w, http.StatusOK, response)
+}
+
+// loadAgentScalingConfig loads scaling configuration from agent.yaml.
+func (s *Server) loadAgentScalingConfig(agentPath string) map[string]interface{} {
+	agentYAML := filepath.Join(agentPath, "agent.yaml")
+	data, err := os.ReadFile(agentYAML)
+	if err != nil {
+		return nil
+	}
+
+	var cfg struct {
+		Scaling struct {
+			MinWorkers         int     `yaml:"min_workers"`
+			MaxWorkers         int     `yaml:"max_workers"`
+			TargetUtilization  float64 `yaml:"target_utilization"`
+			ScaleUpThreshold   float64 `yaml:"scale_up_threshold"`
+			ScaleDownThreshold float64 `yaml:"scale_down_threshold"`
+			ScaleUpDelay       string  `yaml:"scale_up_delay"`
+			ScaleDownDelay     string  `yaml:"scale_down_delay"`
+			QueueSize          int     `yaml:"queue_size"`
+		} `yaml:"scaling"`
+	}
+
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+
+	// Only return if scaling was explicitly configured
+	if cfg.Scaling.MinWorkers == 0 && cfg.Scaling.MaxWorkers == 0 {
+		return nil
+	}
+
+	result := map[string]interface{}{
+		"min_workers": cfg.Scaling.MinWorkers,
+		"max_workers": cfg.Scaling.MaxWorkers,
+	}
+
+	if cfg.Scaling.TargetUtilization > 0 {
+		result["target_utilization"] = cfg.Scaling.TargetUtilization
+	}
+	if cfg.Scaling.ScaleUpThreshold > 0 {
+		result["scale_up_threshold"] = cfg.Scaling.ScaleUpThreshold
+	}
+	if cfg.Scaling.ScaleDownThreshold > 0 {
+		result["scale_down_threshold"] = cfg.Scaling.ScaleDownThreshold
+	}
+	if cfg.Scaling.ScaleUpDelay != "" {
+		result["scale_up_delay"] = cfg.Scaling.ScaleUpDelay
+	}
+	if cfg.Scaling.ScaleDownDelay != "" {
+		result["scale_down_delay"] = cfg.Scaling.ScaleDownDelay
+	}
+	if cfg.Scaling.QueueSize > 0 {
+		result["queue_size"] = cfg.Scaling.QueueSize
+	}
+
+	return result
 }
 
 // handleDeleteAgentByName unregisters an agent and removes its files.
