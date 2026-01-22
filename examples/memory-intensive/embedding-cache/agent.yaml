@@ -7,12 +7,20 @@ memory: 512  # CONFIGURABLE for different OOM tests
 timeout: 300
 
 # ServiceManager integration
-model: mistral
-engine: vllm  # Use vLLM for production GPU inference
+model: tinyllama
+engine: ollama  # Using Ollama for CPU testing (no rate limits)
 
 env:
   - COLLECTIONS_DIR=/agent/data/collections
   - MAX_COLLECTIONS=2
+
+# Telemetry configuration - custom labels for Prometheus filtering
+telemetry:
+  enabled: true
+  labels:
+    team: ml_platform
+    tier: memory_intensive
+    use_case: embedding
 
 scaling:
   min_workers: 1

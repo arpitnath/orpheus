@@ -16,6 +16,7 @@ import (
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/scaling"
 	"orpheus/daemon/pkg/service"
+	"orpheus/daemon/pkg/telemetry"
 
 	"gopkg.in/yaml.v3"
 )
@@ -42,11 +43,15 @@ type AgentPool struct {
 type PoolManager struct {
 	registry       registry.Registry
 	autoscaler     *scaling.BasicAutoscaler
-	execlogDir     string // ExecLog directory for logging
+	execlogDir     string           // ExecLog directory for logging
 	serviceManager *service.Manager // Model server management
 
 	pools map[string]*AgentPool // agentName → pool
 	mu    sync.RWMutex
+
+	// Per-agent telemetry labels (agent name → custom labels)
+	agentLabels   map[string][]telemetry.Label
+	agentLabelsMu sync.RWMutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -61,9 +66,10 @@ func NewPoolManager(registry registry.Registry, autoscaler *scaling.BasicAutosca
 		registry:       registry,
 		autoscaler:     autoscaler,
 		serviceManager: serviceManager,
-		pools:      make(map[string]*AgentPool),
-		ctx:        ctx,
-		cancel:     cancel,
+		pools:          make(map[string]*AgentPool),
+		agentLabels:    make(map[string][]telemetry.Label),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 
@@ -101,6 +107,21 @@ func (pm *PoolManager) CreatePool(agentName string) error {
 
 	// Load session affinity config from agent.yaml
 	sessionConfig := pm.loadSessionConfig(agent.Path)
+
+	// Load telemetry config and store custom labels
+	telemetryConfig := pm.loadTelemetryConfig(agent.Path)
+	if telemetryConfig.IsEnabled() && len(telemetryConfig.Labels) > 0 {
+		pm.agentLabelsMu.Lock()
+		labels := make([]telemetry.Label, 0, len(telemetryConfig.Labels))
+		for k, v := range telemetryConfig.Labels {
+			labels = append(labels, telemetry.Label{Key: k, Value: v})
+		}
+		pm.agentLabels[agentName] = labels
+		pm.agentLabelsMu.Unlock()
+
+		log.Printf("[pool-manager] Agent '%s' has %d custom telemetry labels",
+			agentName, len(labels))
+	}
 
 	agentPool := &AgentPool{
 		agentName:     agentName,
@@ -159,6 +180,11 @@ func (pm *PoolManager) RemovePool(agentName string) error {
 	}
 	delete(pm.pools, agentName)
 	pm.mu.Unlock()
+
+	// Clean up telemetry labels
+	pm.agentLabelsMu.Lock()
+	delete(pm.agentLabels, agentName)
+	pm.agentLabelsMu.Unlock()
 
 	log.Printf("[pool-manager] Removing pool for '%s'", agentName)
 
@@ -587,6 +613,36 @@ func (pm *PoolManager) loadSessionConfig(agentPath string) config.SessionConfig 
 	}
 
 	return sessionConfig
+}
+
+// loadTelemetryConfig loads telemetry configuration from agent.yaml.
+func (pm *PoolManager) loadTelemetryConfig(agentPath string) config.TelemetryConfig {
+	telemetryConfig := config.TelemetryConfig{}
+
+	agentYAML := filepath.Join(agentPath, "agent.yaml")
+	if _, err := os.Stat(agentYAML); err == nil {
+		data, readErr := os.ReadFile(agentYAML)
+		if readErr == nil {
+			var agentCfg struct {
+				Telemetry config.TelemetryConfig `yaml:"telemetry"`
+			}
+
+			if yamlErr := yaml.Unmarshal(data, &agentCfg); yamlErr == nil {
+				telemetryConfig = agentCfg.Telemetry
+			}
+		}
+	}
+
+	telemetryConfig.SetDefaults()
+	return telemetryConfig
+}
+
+// GetLabelsForAgent returns custom telemetry labels for an agent.
+// Returns nil if no custom labels are configured.
+func (pm *PoolManager) GetLabelsForAgent(agentName string) []telemetry.Label {
+	pm.agentLabelsMu.RLock()
+	defer pm.agentLabelsMu.RUnlock()
+	return pm.agentLabels[agentName]
 }
 
 // validateScalingConfig validates a scaling configuration against OSS safety limits.

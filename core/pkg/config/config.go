@@ -26,6 +26,38 @@ func (c *SessionConfig) SetDefaults() {
 	}
 }
 
+// TelemetryConfig holds per-agent telemetry configuration.
+// Allows agents to specify custom Prometheus labels that will be added
+// to all metrics emitted for this agent.
+type TelemetryConfig struct {
+	// Enabled controls whether telemetry is emitted for this agent (default: true)
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// Labels are custom labels added to all metrics for this agent.
+	// Keys must match [a-zA-Z_][a-zA-Z0-9_]* and cannot be reserved names.
+	// Reserved: agent, le, quantile
+	Labels map[string]string `yaml:"labels,omitempty"`
+}
+
+// SetDefaults applies default values to TelemetryConfig.
+func (c *TelemetryConfig) SetDefaults() {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if c.Labels == nil {
+		c.Labels = make(map[string]string)
+	}
+}
+
+// IsEnabled returns true if telemetry is enabled (defaults to true).
+func (c *TelemetryConfig) IsEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
 // AgentConfig represents the parsed agent.yaml configuration
 type AgentConfig struct {
 	// Required fields from YAML
@@ -50,6 +82,9 @@ type AgentConfig struct {
 
 	// Session affinity configuration
 	Session SessionConfig `yaml:"session,omitempty"`
+
+	// Telemetry configuration (custom labels, enable/disable)
+	Telemetry TelemetryConfig `yaml:"telemetry,omitempty"`
 
 	// Model configuration (NEW - ServiceManager)
 	Model  string `yaml:"model,omitempty"`  // Model name (e.g., "mistral-7b", "llama-3-8b")

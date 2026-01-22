@@ -9,13 +9,15 @@ import (
 // QueueCollector wraps PoolManager to collect request queue metrics.
 // Exports metrics for: pending requests, processing requests, queue depth, max size.
 type QueueCollector struct {
-	poolManager *PoolManager
+	poolManager   *PoolManager
+	labelProvider LabelProvider // For custom per-agent labels
 }
 
 // NewQueueCollector creates a collector that wraps the pool manager's queues.
 func NewQueueCollector(poolManager *PoolManager) *QueueCollector {
 	return &QueueCollector{
-		poolManager: poolManager,
+		poolManager:   poolManager,
+		labelProvider: poolManager, // PoolManager implements LabelProvider
 	}
 }
 
@@ -46,8 +48,12 @@ func (c *QueueCollector) Collect(ctx context.Context) ([]telemetry.Metric, error
 		// Get stats from queue
 		stats := pool.GetQueueStats()
 
-		// Create labels for this agent
-		labels := []telemetry.Label{{Key: "agent", Value: stats.AgentID}}
+		// Create base labels for this agent
+		baseLabels := []telemetry.Label{{Key: "agent", Value: stats.AgentID}}
+
+		// Merge with custom labels from agent.yaml
+		customLabels := c.labelProvider.GetLabelsForAgent(stats.AgentID)
+		labels := MergeLabels(baseLabels, customLabels)
 
 		// Pending requests
 		metrics = append(metrics, telemetry.Metric{

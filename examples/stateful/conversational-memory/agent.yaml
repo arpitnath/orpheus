@@ -7,11 +7,20 @@ memory: 512
 timeout: 120
 
 # Model server via ServiceManager
-model: mistral
-engine: vllm  # Use vLLM for production GPU inference
+model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+engine: vllm  # vLLM for GPU inference
 
 env:
   - WORKSPACE_DIR=/workspace
+  - MODEL_URL=http://172.31.14.168:8000
+
+# Telemetry configuration - custom labels for Prometheus filtering
+telemetry:
+  enabled: true
+  labels:
+    team: ml_platform
+    tier: standard
+    use_case: conversational
 
 # Session affinity CRITICAL for this agent
 session:

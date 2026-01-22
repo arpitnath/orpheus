@@ -162,7 +162,7 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	if err := telemetryRegistry.Register(NewQueueCollector(poolManager)); err != nil {
 		log.Printf("[telemetry] Warning: Failed to register QueueCollector: %v", err)
 	}
-	if err := telemetryRegistry.Register(NewExecLogCollector(reg, execlogDir)); err != nil {
+	if err := telemetryRegistry.Register(NewExecLogCollector(reg, execlogDir, poolManager)); err != nil {
 		log.Printf("[telemetry] Warning: Failed to register ExecLogCollector: %v", err)
 	}
 	if err := telemetryRegistry.Register(NewServiceCollector(serviceManager)); err != nil {

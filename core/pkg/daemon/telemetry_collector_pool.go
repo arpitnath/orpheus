@@ -9,13 +9,15 @@ import (
 // PoolCollector wraps PoolManager to collect worker pool metrics.
 // Exports metrics for: total workers, idle workers, busy workers, desired size.
 type PoolCollector struct {
-	poolManager *PoolManager
+	poolManager   *PoolManager
+	labelProvider LabelProvider // For custom per-agent labels
 }
 
 // NewPoolCollector creates a collector that wraps the pool manager.
 func NewPoolCollector(poolManager *PoolManager) *PoolCollector {
 	return &PoolCollector{
-		poolManager: poolManager,
+		poolManager:   poolManager,
+		labelProvider: poolManager, // PoolManager implements LabelProvider
 	}
 }
 
@@ -46,8 +48,12 @@ func (c *PoolCollector) Collect(ctx context.Context) ([]telemetry.Metric, error)
 		// Get stats from pool
 		stats := pool.GetPoolStats()
 
-		// Create labels for this agent
-		labels := []telemetry.Label{{Key: "agent", Value: stats.AgentID}}
+		// Create base labels for this agent
+		baseLabels := []telemetry.Label{{Key: "agent", Value: stats.AgentID}}
+
+		// Merge with custom labels from agent.yaml
+		customLabels := c.labelProvider.GetLabelsForAgent(stats.AgentID)
+		labels := MergeLabels(baseLabels, customLabels)
 
 		// Total workers
 		metrics = append(metrics, telemetry.Metric{

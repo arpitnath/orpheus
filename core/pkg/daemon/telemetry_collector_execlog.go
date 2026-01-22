@@ -12,15 +12,17 @@ import (
 // ExecLogCollector wraps ExecLog to collect execution metrics.
 // Exports metrics for: total requests, requests by status, success rate.
 type ExecLogCollector struct {
-	registry   registry.Registry
-	execlogDir string
+	registry      registry.Registry
+	execlogDir    string
+	labelProvider LabelProvider // For custom per-agent labels
 }
 
 // NewExecLogCollector creates a collector that wraps ExecLog readers.
-func NewExecLogCollector(registry registry.Registry, execlogDir string) *ExecLogCollector {
+func NewExecLogCollector(registry registry.Registry, execlogDir string, labelProvider LabelProvider) *ExecLogCollector {
 	return &ExecLogCollector{
-		registry:   registry,
-		execlogDir: execlogDir,
+		registry:      registry,
+		execlogDir:    execlogDir,
+		labelProvider: labelProvider,
 	}
 }
 
@@ -64,8 +66,15 @@ func (c *ExecLogCollector) Collect(ctx context.Context) ([]telemetry.Metric, err
 				return nil
 			}
 
-			// Create labels for this agent
-			labels := []telemetry.Label{{Key: "agent", Value: agentName}}
+			// Create base labels for this agent
+			baseLabels := []telemetry.Label{{Key: "agent", Value: agentName}}
+
+			// Merge with custom labels from agent.yaml
+			var customLabels []telemetry.Label
+			if c.labelProvider != nil {
+				customLabels = c.labelProvider.GetLabelsForAgent(agentName)
+			}
+			labels := MergeLabels(baseLabels, customLabels)
 			var result []telemetry.Metric
 
 			// Total requests
