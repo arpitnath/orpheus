@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"orpheus/daemon/pkg/config"
 	"orpheus/daemon/pkg/mcp"
@@ -14,7 +12,7 @@ import (
 )
 
 // daemonServerGetter implements mcp.ServerGetter for daemon mode.
-// It looks up deployed agents in ~/.orpheus/agents/ directory.
+// It uses the registry to look up deployed agents (consistent with HTTP handler).
 type daemonServerGetter struct {
 	server *Server
 }
@@ -26,19 +24,13 @@ func NewDaemonServerGetter(server *Server) mcp.ServerGetter {
 
 // GetAgentInstance returns an agent instance for MCP execution.
 func (d *daemonServerGetter) GetAgentInstance(agentID string) (mcp.AgentInstance, error) {
-	// agentID = agent name from MCP URL path
-	// Look up deployed agent in ~/.orpheus/agents/{agentID}
-	home, err := os.UserHomeDir()
+	// Use registry to get the correct agent path (consistent with HTTP handler)
+	agent, err := d.server.registry.Get(agentID)
 	if err != nil {
-		return nil, fmt.Errorf("get home dir: %w", err)
-	}
-
-	agentPath := filepath.Join(home, ".orpheus", "agents", agentID)
-
-	// Verify agent exists
-	if _, err := os.Stat(agentPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("agent not found: %s", agentID)
 	}
+
+	agentPath := agent.Path
 
 	// Load agent config to verify it's valid
 	cfg, err := config.Load(agentPath)

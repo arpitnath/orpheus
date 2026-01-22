@@ -1,0 +1,32 @@
+name: agent-router
+runtime: nodejs20
+module: agent.js
+entrypoint: handler
+
+# Memory configuration
+memory: 256
+timeout: 120
+
+# Environment variables (hardcoded for now - secret management not yet implemented)
+env:
+  - ANTHROPIC_API_KEY=
+  - MCP_URL=
+
+# Telemetry configuration
+telemetry:
+  enabled: true
+  labels:
+    team: platform
+    tier: integration
+    use_case: agent_router
+
+# Scaling configuration
+scaling:
+  min_workers: 1
+  max_workers: 5
+  target_utilization: 1.5
+  scale_up_threshold: 2.0
+  scale_down_threshold: 0.3
+  scale_up_delay: "10s"
+  scale_down_delay: "30s"
+  queue_size: 20
