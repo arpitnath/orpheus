@@ -1,8 +1,6 @@
 package daemon
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -233,23 +231,29 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Agent runtime: %s", agentConfig.Runtime)
 	emit("deploy_progress", "validating", "Agent configuration valid", 30)
 
-	// Determine base image path based on runtime
-	baseImagePath, err := resolveBaseImagePath(agentConfig.Runtime)
+	// Ensure runtime is ready (download/build if needed)
+	emit("deploy_progress", "preparing_runtime", "Preparing runtime environment", 35)
+	runtimePath, err := s.downloader.EnsureRuntime(r.Context(), agentConfig.Runtime)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("resolve base image: %v", err))
+		if useSSE {
+			emitError("preparing_runtime", fmt.Sprintf("runtime: %v", err))
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("runtime: %v", err))
+		}
 		return
 	}
 
-	log.Printf("Using base image: %s", baseImagePath)
+	log.Printf("Using runtime: %s", runtimePath)
 
-	// Copy base image to agent directory
-	log.Printf("Copying base image to %s...", agentDir)
-	if err := copyDir(baseImagePath, agentDir); err != nil {
+	// Copy runtime rootfs to agent directory
+	emit("deploy_progress", "copying_runtime", "Setting up container environment", 45)
+	log.Printf("Copying runtime rootfs to %s...", agentDir)
+	if err := copyDir(runtimePath, agentDir); err != nil {
 		os.RemoveAll(agentDir)
 		if useSSE {
-			emitError("copying", fmt.Sprintf("copy base image: %v", err))
+			emitError("copying_runtime", fmt.Sprintf("copy runtime: %v", err))
 		} else {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("copy base image: %v", err))
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("copy runtime: %v", err))
 		}
 		return
 	}
@@ -266,7 +270,7 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	emit("deploy_progress", "copying", "Base image and agent code ready", 50)
+	emit("deploy_progress", "copying", "Runtime and agent code ready", 50)
 
 	// Create workspace directory for persistent storage
 	workspaceDir, err := createWorkspaceDir(agentName)
@@ -306,9 +310,6 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 	// Calculate deployed size
 	sizeMB := calculateDirSizeMB(agentDir)
-
-	// Extract org_id from API key (for MCP endpoint)
-	orgID := getOrgIDFromRequest(r)
 
 	// Parse form data to get resolved env vars (sent from CLI)
 	var resolvedEnv []string
@@ -350,11 +351,11 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	emit("deploy_progress", "registering", "Agent registered in pool", 90)
 
-	// Build endpoint URLs (NEW RESTful format)
+	// Build endpoint URLs (RESTful format)
 	serverDomain := r.Host // Use request host for now
 	endpoints := map[string]string{
 		"http": fmt.Sprintf("http://%s/v1/agents/%s/run", serverDomain, agentName),
-		"mcp":  fmt.Sprintf("mcp://%s/mcp/%s/agents/%s", serverDomain, orgID, agentName),
+		"mcp":  fmt.Sprintf("mcp://%s/mcp/agents/%s", serverDomain, agentName),
 	}
 
 	// Build success response
@@ -392,32 +393,6 @@ func calculateDirSizeMB(dirPath string) int {
 		return nil
 	})
 	return int(size / (1024 * 1024))
-}
-
-// getOrgIDFromRequest extracts org_id from the API key in the request.
-// For v0.1.0, derives org_id from API key hash.
-// Future: Get org_id from API key database lookup.
-func getOrgIDFromRequest(r *http.Request) string {
-	// Extract API key from Authorization header
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		return "org-unknown"
-	}
-
-	// Parse "Bearer <key>"
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return "org-unknown"
-	}
-
-	apiKey := strings.TrimSpace(parts[1])
-
-	// Derive org_id from API key hash (v0.1.0 simple approach)
-	// Hash the key and take first 16 hex chars
-	hash := sha256.Sum256([]byte(apiKey))
-	orgID := "org-" + hex.EncodeToString(hash[:])[:12]
-
-	return orgID
 }
 
 // resolveBaseImagePath returns the path to the base image for the given runtime.
@@ -479,6 +454,15 @@ func copyDir(src, dst string) error {
 	return nil
 }
 
+// copyFile copies a single file from src to dst
+func copyFile(src, dst string) error {
+	cmd := exec.Command("cp", src, dst)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("cp failed: %v: %s", err, string(output))
+	}
+	return nil
+}
+
 // installDependencies installs agent dependencies based on runtime.
 // - Python: pip install -r requirements.txt --target /packages
 // - Node.js: npm install in agent code directory
@@ -486,7 +470,7 @@ func copyDir(src, dst string) error {
 func installDependencies(runtime, agentCodeDir, agentDir string) (*DependencyInfo, error) {
 	switch runtime {
 	case config.RuntimePython3, "":
-		installed, err := installPythonDeps(agentCodeDir, agentDir)
+		installed, err := installPythonDeps(agentCodeDir, agentDir, runtime)
 		if err != nil {
 			return nil, err
 		}
@@ -495,7 +479,7 @@ func installDependencies(runtime, agentCodeDir, agentDir string) (*DependencyInf
 		}
 		return &DependencyInfo{Installed: false, Runtime: "python3"}, nil
 	case config.RuntimeNodeJS20:
-		installed, err := installNodeDeps(agentCodeDir)
+		installed, err := installNodeDeps(agentCodeDir, agentDir)
 		if err != nil {
 			return nil, err
 		}
@@ -510,7 +494,7 @@ func installDependencies(runtime, agentCodeDir, agentDir string) (*DependencyInf
 
 // installPythonDeps installs Python dependencies from requirements.txt.
 // Returns true if dependencies were installed, false if skipped.
-func installPythonDeps(agentCodeDir, agentDir string) (bool, error) {
+func installPythonDeps(agentCodeDir, agentDir, runtime string) (bool, error) {
 	requirementsFile := filepath.Join(agentCodeDir, "requirements.txt")
 	if _, err := os.Stat(requirementsFile); os.IsNotExist(err) {
 		log.Printf("No requirements.txt found, skipping Python dependency install")
@@ -520,9 +504,35 @@ func installPythonDeps(agentCodeDir, agentDir string) (bool, error) {
 	packagesDir := filepath.Join(agentDir, "packages")
 	log.Printf("Installing Python dependencies to %s", packagesDir)
 
-	cmd := exec.Command("pip3", "install",
-		"-r", requirementsFile,
-		"--target", packagesDir,
+	// Create packages directory inside the rootfs
+	if err := os.MkdirAll(packagesDir, 0755); err != nil {
+		return false, fmt.Errorf("create packages dir: %w", err)
+	}
+
+	// Copy requirements.txt into the rootfs temporarily
+	tmpRequirements := filepath.Join(agentDir, "tmp", "requirements.txt")
+	if err := os.MkdirAll(filepath.Dir(tmpRequirements), 0755); err != nil {
+		return false, fmt.Errorf("create tmp dir: %w", err)
+	}
+	if err := copyFile(requirementsFile, tmpRequirements); err != nil {
+		return false, fmt.Errorf("copy requirements.txt: %w", err)
+	}
+	defer os.Remove(tmpRequirements)
+
+	// Copy DNS config into the rootfs for network access
+	etcDir := filepath.Join(agentDir, "etc")
+	if err := os.MkdirAll(etcDir, 0755); err != nil {
+		return false, fmt.Errorf("create etc dir: %w", err)
+	}
+	if err := copyFile("/etc/resolv.conf", filepath.Join(etcDir, "resolv.conf")); err != nil {
+		log.Printf("Warning: could not copy resolv.conf: %v", err)
+	}
+
+	// Use chroot to run pip install inside the container context
+	// This ensures the shebang #!/usr/bin/python3 resolves to the container's Python
+	cmd := exec.Command("chroot", agentDir, "/usr/bin/pip3", "install",
+		"-r", "/tmp/requirements.txt",
+		"--target", "/packages",
 		"--quiet",
 		"--no-cache-dir")
 
@@ -532,9 +542,9 @@ func installPythonDeps(agentCodeDir, agentDir string) (bool, error) {
 	return true, nil
 }
 
-// installNodeDeps installs Node.js dependencies from package.json.
+// installNodeDeps installs Node.js dependencies from package.json using chroot.
 // Returns true if dependencies were installed, false if skipped.
-func installNodeDeps(agentCodeDir string) (bool, error) {
+func installNodeDeps(agentCodeDir, agentDir string) (bool, error) {
 	packageJSON := filepath.Join(agentCodeDir, "package.json")
 	if _, err := os.Stat(packageJSON); os.IsNotExist(err) {
 		log.Printf("No package.json found, skipping Node.js dependency install")
@@ -543,7 +553,20 @@ func installNodeDeps(agentCodeDir string) (bool, error) {
 
 	log.Printf("Installing Node.js dependencies in %s", agentCodeDir)
 
-	cmd := exec.Command("npm", "install", "--prefix", agentCodeDir, "--quiet")
+	// Copy DNS config into the rootfs for network access
+	etcDir := filepath.Join(agentDir, "etc")
+	if err := os.MkdirAll(etcDir, 0755); err != nil {
+		return false, fmt.Errorf("create etc dir: %w", err)
+	}
+	if err := copyFile("/etc/resolv.conf", filepath.Join(etcDir, "resolv.conf")); err != nil {
+		log.Printf("Warning: could not copy resolv.conf: %v", err)
+	}
+
+	// Use chroot to run npm install inside the container context
+	// npm install runs in /agent directory where package.json is located
+	cmd := exec.Command("chroot", agentDir, "sh", "-c",
+		"cd /agent && /usr/bin/npm install --omit=dev --no-fund --no-audit 2>&1")
+
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("npm install failed: %v: %s", err, string(output))
 	}

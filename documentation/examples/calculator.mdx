@@ -1,0 +1,116 @@
+---
+title: 'Calculator Agent'
+description: 'Simple example to understand Orpheus basics'
+---
+
+## Overview
+
+A minimal agent that evaluates math expressions. Great for learning Orpheus.
+
+## Files
+
+**agent.yaml**
+```yaml
+name: calculator
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+memory: 512
+timeout: 60
+
+scaling:
+  min_workers: 1
+  max_workers: 5
+```
+
+**agent.py**
+```python
+def handler(input_data):
+    expression = input_data.get('expression', '2+2')
+
+    try:
+        # Safe math evaluation
+        result = eval(expression, {"__builtins__": {}}, {})
+        return {
+            'result': result,
+            'expression': expression,
+            'status': 'success'
+        }
+    except Exception as e:
+        return {
+            'error': str(e),
+            'status': 'failed'
+        }
+```
+
+## Deploy & Run
+
+```bash
+# Deploy
+orpheus deploy .
+
+# Run
+orpheus run calculator '{"expression": "10 * 5 + 2"}'
+```
+
+**Output:**
+```json
+{
+  "result": 52,
+  "expression": "10 * 5 + 2",
+  "status": "success"
+}
+```
+
+## Add State (Counter)
+
+Make it stateful using workspace:
+
+```python
+import os
+
+def handler(input_data):
+    counter_file = '/workspace/count.txt'
+
+    # Load count
+    count = 0
+    if os.path.exists(counter_file):
+        with open(counter_file) as f:
+            count = int(f.read())
+
+    # Process
+    expression = input_data.get('expression', '0')
+    result = eval(expression)
+    count += 1
+
+    # Save count
+    with open(counter_file, 'w') as f:
+        f.write(str(count))
+
+    return {
+        'result': result,
+        'request_number': count
+    }
+```
+
+Now each request shows how many times the agent has been called.
+
+## Test Autoscaling
+
+```bash
+# Send 10 concurrent requests
+for i in {1..10}; do
+  orpheus run calculator '{"expression": "'$i' * 2"}' &
+done
+wait
+
+# Check scaling
+orpheus stats calculator
+```
+
+Watch workers scale up to handle the load.
+
+<Card title="Next Example" icon="code" href="/examples/rag-search">
+  RAG Search Agent →
+</Card>

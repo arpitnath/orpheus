@@ -1,0 +1,128 @@
+---
+title: 'Quick Start'
+description: 'Deploy your first agent in 5 minutes'
+---
+
+## Prerequisites
+
+- macOS or Linux
+- Node.js 18+ (for CLI)
+- Lima (macOS only): `brew install lima`
+
+## Step 1: Install
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    # Install Lima (if not already installed)
+    brew install lima
+
+    # Install CLI
+    npm install -g @orpheus/cli
+
+    # Start VM (first time takes ~3 min)
+    orpheus vm start
+
+    # Verify
+    orpheus status
+    ```
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    # Download daemon
+    curl -fsSL https://get.orpheus.run | sh
+
+    # Start daemon
+    sudo systemctl start orpheusd
+
+    # Install CLI
+    npm install -g @orpheus/cli
+
+    # Verify
+    orpheus status
+    ```
+  </Tab>
+</Tabs>
+
+## Step 2: Create Agent
+
+Create a folder with two files:
+
+**agent.yaml**
+```yaml
+name: hello-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+memory: 512
+timeout: 60
+
+scaling:
+  min_workers: 1
+  max_workers: 3
+```
+
+**agent.py**
+```python
+def handler(input_data):
+    name = input_data.get('name', 'World')
+    return {
+        'message': f'Hello, {name}!',
+        'status': 'success'
+    }
+```
+
+## Step 3: Deploy
+
+```bash
+orpheus deploy .
+```
+
+First deploy takes ~30s (builds runtime). Subsequent deploys take ~2s.
+
+## Step 4: Run
+
+```bash
+orpheus run hello-agent '{"name": "Orpheus"}'
+```
+
+**Output:**
+```json
+{
+  "message": "Hello, Orpheus!",
+  "status": "success"
+}
+```
+
+<Check>No cold start - worker was already warm!</Check>
+
+## Step 5: Verify
+
+```bash
+# List agents
+orpheus list
+
+# Check stats
+orpheus stats hello-agent
+
+# View execution history
+orpheus runs hello-agent
+```
+
+## What Just Happened
+
+1. **Worker stayed warm** - No cold start on second request
+2. **Execution logged** - Every request tracked in ExecLog
+3. **Isolated container** - Ran in sandboxed runc container
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/concepts/autoscaling">
+    Learn how autoscaling works
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/calculator">
+    See more agent patterns
+  </Card>
+</CardGroup>

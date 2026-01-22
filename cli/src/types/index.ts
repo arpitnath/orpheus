@@ -3,12 +3,12 @@ export interface ServerConfig {
   mode: 'unix_socket' | 'tcp';
   socket_path?: string;
   url?: string;
-  auth_key?: string;
 }
 
-export interface CLIConfig {
-  active: string;
-  servers: Record<string, ServerConfig>;
+// Config file structure (~/.orpheus/config.yaml)
+export interface OrpheusConfigFile {
+  active?: string;  // Name of active server
+  servers?: Record<string, ServerConfig>;
 }
 
 //@AGENT_TYPES
@@ -137,15 +137,42 @@ export interface AgentDetails {
   scaling?: {
     min_workers: number;
     max_workers: number;
+    target_utilization?: number;
+    scale_up_threshold?: number;
+    scale_down_threshold?: number;
+    scale_up_delay?: string;
+    scale_down_delay?: string;
+    queue_size?: number;
   };
   endpoints: {
     http: string;
     mcp?: string;
   };
   deployed_at?: string;
+  created_at?: string;
+  updated_at?: string;
   env?: Record<string, string>;
-  memory_mb?: number;
-  timeout_seconds?: number;
+  env_vars?: string[];
+  // Memory and timeout from agent.yaml
+  memory?: number;
+  timeout?: number;
+  memory_mb?: number;  // Legacy field
+  timeout_seconds?: number;  // Legacy field
+  // Model server integration
+  model?: string;
+  engine?: string;
+  // Session affinity config
+  session?: {
+    enabled: boolean;
+    key: string;
+    ttl: string;
+    wait_timeout: string;
+  };
+  // Telemetry config with custom labels
+  telemetry?: {
+    enabled: boolean;
+    labels: Record<string, string>;
+  };
 }
 
 export interface ContainerInfo {
@@ -154,6 +181,73 @@ export interface ContainerInfo {
   status: 'running' | 'stopped' | 'exited';
   created: string;
   pid?: number;
+}
+
+export interface CrashedRequest {
+  request_id: string;
+  agent_name: string;
+  worker_id: string;
+  started_at: string;
+  session_id?: string;
+}
+
+export interface CrashedRequestsResponse {
+  crashed_requests: CrashedRequest[];
+  count: number;
+}
+
+export interface ExecLogEntry {
+  request_id: string;
+  agent_name: string;
+  state: string;
+  worker_id?: string;
+  session_id?: string;
+  timestamp: string;
+  duration_ms?: number;
+  error?: string;
+}
+
+export interface ExecLogFilters {
+  agent?: string;
+  status?: string;
+  session?: string;
+  worker?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ExecLogsResponse {
+  data: ExecLogEntry[];
+  count: number;
+  total: number;
+  page: number;
+  limit: number;
+  offset: number;
+  total_pages: number;
+}
+
+export interface ExecLogStats {
+  agent_name: string;
+  total: number;
+  completed: number;
+  failed: number;
+  crashed: number;
+  success_rate: number;
+  avg_duration_ms: number;
+  health_status: string;
+}
+
+export interface ExecLogStatsResponse {
+  agents: ExecLogStats[];
+  global: {
+    total_requests: number;
+    completed: number;
+    failed: number;
+    crashed: number;
+    success_rate: number;
+    avg_duration_ms: number;
+  };
+  timestamp: string;
 }
 
 //@CLIENT_TYPES
@@ -167,6 +261,9 @@ export interface OrpheusClient {
   inspect(agentName: string): Promise<AgentDetails>;
   workspaceInfo(agentName: string): Promise<WorkspaceInfoResponse>;
   workspaceClean(agentName: string): Promise<WorkspaceCleanResponse>;
+  getCrashedRequests(): Promise<CrashedRequestsResponse>;
+  getExecLogs(filters?: ExecLogFilters): Promise<ExecLogsResponse>;
+  getExecLogStats(agentName?: string): Promise<ExecLogStatsResponse>;
   close(): void;
 }
 

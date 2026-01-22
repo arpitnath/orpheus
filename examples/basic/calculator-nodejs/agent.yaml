@@ -1,0 +1,27 @@
+name: calculator-nodejs
+runtime: nodejs20
+module: agent.js
+entrypoint: handler
+
+# Memory configuration
+memory: 256
+memory_limit: 512
+
+# Timeout configuration
+timeout: 120
+idle_timeout: 60
+
+# Environment variables (resolved from local shell at deploy time)
+env:
+  - OPENAI_API_KEY=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
+
+# Scaling configuration for load testing
+scaling:
+  min_workers: 1
+  max_workers: 5
+  target_utilization: 1.5
+  scale_up_threshold: 2.0
+  scale_down_threshold: 0.3
+  scale_up_delay: "10s"
+  scale_down_delay: "30s"
+  queue_size: 20

@@ -1,0 +1,34 @@
+name: conversational-memory
+runtime: python3
+module: agent
+entrypoint: handler
+
+memory: 512
+timeout: 120
+
+# Model server via ServiceManager
+model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+engine: vllm  # vLLM for GPU inference
+
+env:
+  - WORKSPACE_DIR=/workspace
+  - MODEL_URL=http://172.31.14.168:8000
+
+# Telemetry configuration - custom labels for Prometheus filtering
+telemetry:
+  enabled: true
+  labels:
+    team: ml_platform
+    tier: standard
+    use_case: conversational
+
+# Session affinity CRITICAL for this agent
+session:
+  enabled: true
+  key: "X-Session-ID"
+  ttl: "2h"
+  wait_timeout: "200ms"
+
+scaling:
+  min_workers: 1
+  max_workers: 5

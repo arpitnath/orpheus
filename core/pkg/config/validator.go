@@ -4,7 +4,22 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+)
+
+var (
+	// validLabelKeyRegex matches Prometheus label key format
+	validLabelKeyRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+	// reservedLabelKeys cannot be used as custom labels
+	reservedLabelKeys = map[string]bool{
+		"agent":    true, // System-managed
+		"le":       true, // Histogram bucket
+		"quantile": true, // Summary quantile
+		"engine":   true, // Service collector uses this
+		"status":   true, // ExecLog collector uses this
+	}
 )
 
 // Validate checks the configuration for required fields and valid values
@@ -52,6 +67,20 @@ func Validate(cfg *AgentConfig) error {
 	if len(cfg.Env) > 0 {
 		if err := ValidateEnvVars(cfg.Env); err != nil {
 			return NewFieldError(ErrCodeInvalidValue, "env", err.Error())
+		}
+	}
+
+	// Validate engine if specified
+	if cfg.Engine != "" {
+		if err := validateEngine(cfg.Engine); err != nil {
+			return err
+		}
+	}
+
+	// Validate telemetry labels
+	if len(cfg.Telemetry.Labels) > 0 {
+		if err := validateTelemetryLabels(cfg.Telemetry.Labels); err != nil {
+			return err
 		}
 	}
 
@@ -106,4 +135,55 @@ func validateModuleExists(cfg *AgentConfig) error {
 	}
 
 	return NewFieldError(ErrCodeNotFound, "module", "module file not found: "+cfg.Module)
+}
+
+// validateEngine checks if the inference engine is supported
+func validateEngine(engine string) error {
+	validEngines := []string{"ollama", "vllm"}
+
+	for _, valid := range validEngines {
+		if engine == valid {
+			return nil
+		}
+	}
+
+	return NewFieldError(ErrCodeInvalidValue, "engine",
+		"unsupported engine: "+engine+". Supported: ollama, vllm")
+}
+
+// validateTelemetryLabels validates custom label keys and values.
+func validateTelemetryLabels(labels map[string]string) error {
+	for key, value := range labels {
+		// Check key format
+		if !validLabelKeyRegex.MatchString(key) {
+			return NewFieldError(ErrCodeInvalidValue, "telemetry.labels."+key,
+				"label key must match [a-zA-Z_][a-zA-Z0-9_]*")
+		}
+
+		// Check reserved keys
+		if reservedLabelKeys[key] {
+			return NewFieldError(ErrCodeInvalidValue, "telemetry.labels."+key,
+				"'"+key+"' is a reserved label name")
+		}
+
+		// Check value length
+		if len(value) > 128 {
+			return NewFieldError(ErrCodeInvalidValue, "telemetry.labels."+key,
+				"label value exceeds 128 characters")
+		}
+
+		// Check for empty value
+		if value == "" {
+			return NewFieldError(ErrCodeInvalidValue, "telemetry.labels."+key,
+				"label value cannot be empty")
+		}
+	}
+
+	// Check total label count
+	if len(labels) > 10 {
+		return NewFieldError(ErrCodeInvalidValue, "telemetry.labels",
+			"maximum 10 custom labels allowed")
+	}
+
+	return nil
 }

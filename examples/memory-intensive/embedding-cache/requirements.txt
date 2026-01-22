@@ -1,0 +1,21 @@
+# Embedding Cache Agent Dependencies
+# Same as rag-agent, plus psutil for memory tracking
+
+# LangChain core
+langchain>=0.1.0
+langchain-community>=0.0.10
+langchain-core>=0.1.0
+
+# Model integrations
+langchain-ollama>=0.1.0
+langchain-huggingface>=0.0.1
+
+# Embeddings and vector store
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.0
+
+# Memory tracking
+psutil>=5.9.0
+
+# Additional dependencies
+numpy>=1.24.0

@@ -1,0 +1,161 @@
+---
+title: 'agent.yaml Reference'
+description: 'Complete configuration reference for agent.yaml'
+---
+
+## Minimal Example
+
+```yaml
+name: my-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+```
+
+## Full Example
+
+```yaml
+name: my-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+# Resources
+memory: 512          # MB per worker
+timeout: 300         # Seconds max execution
+
+# Autoscaling
+scaling:
+  min_workers: 1
+  max_workers: 10
+  scale_up_threshold: 3.0
+  scale_down_threshold: 0.5
+  idle_timeout_seconds: 300
+```
+
+---
+
+## Required Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Unique agent identifier (lowercase, hyphens allowed) |
+| `runtime` | string | `python3` or `nodejs20` |
+| `module` | string | Entry point file (`agent.py` or `index.js`) |
+| `entrypoint` | string | Handler function name |
+
+---
+
+## Resource Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `memory` | int | 512 | Memory limit in MB |
+| `timeout` | int | 300 | Max execution time in seconds |
+
+---
+
+## Scaling Fields
+
+All scaling fields are optional.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `min_workers` | int | 1 | Minimum warm workers |
+| `max_workers` | int | 10 | Maximum workers |
+| `scale_up_threshold` | float | 3.0 | Scale up when queue/workers > this |
+| `scale_down_threshold` | float | 0.5 | Scale down when queue/workers < this |
+| `idle_timeout_seconds` | int | 300 | Remove idle workers after this |
+
+---
+
+## Runtime Options
+
+### Python
+
+```yaml
+runtime: python3
+```
+
+- Python 3.10+
+- Include `requirements.txt` for dependencies
+- Dependencies installed on first deploy
+
+### Node.js
+
+```yaml
+runtime: nodejs20
+```
+
+- Node.js 20.x
+- Include `package.json` for dependencies
+- Uses npm install on first deploy
+
+---
+
+## Examples
+
+### Minimal (zero cold starts)
+
+```yaml
+name: fast-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+scaling:
+  min_workers: 1
+```
+
+### High throughput
+
+```yaml
+name: batch-processor
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+memory: 1024
+timeout: 600
+
+scaling:
+  min_workers: 2
+  max_workers: 20
+  scale_up_threshold: 2.0
+```
+
+### Long-running tasks
+
+```yaml
+name: analysis-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+memory: 2048
+timeout: 1800  # 30 minutes
+
+scaling:
+  min_workers: 1
+  max_workers: 5
+```
+
+---
+
+## Validation
+
+Deploy validates your agent.yaml:
+
+```bash
+orpheus deploy .
+```
+
+**Common errors:**
+- `name` contains invalid characters
+- `runtime` not recognized
+- `module` file not found
+- `entrypoint` function not found
+
+<Card title="Quick Start" icon="rocket" href="/quickstart">
+  Deploy your first agent →
+</Card>

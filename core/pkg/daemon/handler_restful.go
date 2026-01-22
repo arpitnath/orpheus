@@ -8,13 +8,19 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"orpheus/daemon/pkg/config"
+	"orpheus/daemon/pkg/execlog"
+	"orpheus/daemon/pkg/proxy"
 	"orpheus/daemon/pkg/registry"
 	"orpheus/daemon/pkg/runtime"
 	"orpheus/daemon/pkg/scaling"
+
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 )
 
 // handleAgentResource routes RESTful agent requests based on path.
@@ -153,6 +159,26 @@ func (s *Server) executeViaPool(w http.ResponseWriter, r *http.Request, agentNam
 		SessionID:  sessionID,
 	}
 
+	// Log QUEUED state (best-effort, async)
+	go func() {
+		writer, err := execlog.NewWriter(s.execlogDir, agentName)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		// Don't close - writer is cached and reused
+
+		err = writer.Log(&execlog.Event{
+			Timestamp: time.Now(),
+			RequestID: scalingReq.ID,
+			State:     execlog.StateQueued,
+			SessionID: ptrOrNil(scalingReq.SessionID),
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to log QUEUED: %v", err)
+		}
+	}()
+
 	// Enqueue to agent's queue
 	if err := pool.queue.Enqueue(r.Context(), scalingReq); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "agent queue full")
@@ -199,6 +225,31 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 		return
 	}
 
+	// Generate request ID for execlog tracking
+	requestID := uuid.New().String()
+
+	// Helper to log execlog events (best-effort, non-blocking for QUEUED)
+	logExecEvent := func(state string, durationMs *int64, errMsg *string) {
+		writer, err := execlog.NewWriter(s.execlogDir, agent.Name)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		event := &execlog.Event{
+			Timestamp:  time.Now(),
+			RequestID:  requestID,
+			State:      state,
+			DurationMs: durationMs,
+			Error:      errMsg,
+		}
+		if err := writer.Log(event); err != nil {
+			log.Printf("Warning: Failed to log %s: %v", state, err)
+		}
+	}
+
+	// Log QUEUED state (async, best-effort)
+	go logExecEvent(execlog.StateQueued, nil, nil)
+
 	// Build full RunRequest using stored agent metadata
 	fullReq := &RunRequest{
 		AgentPath: agent.Path,
@@ -224,17 +275,39 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 		fullReq.Env[k] = v
 	}
 
-	// Execute using existing flow
+	// Log STARTED state and track execution time
+	logExecEvent(execlog.StateStarted, nil, nil)
+	startTime := time.Now()
+
+	// Execute using existing flow (pass ServiceManager for model server management)
 	ctx := r.Context()
-	result, err := Execute(ctx, fullReq)
-	if err != nil {
+	result, err := Execute(ctx, fullReq, s.serviceManager)
+
+	// Calculate duration
+	durationMs := time.Since(startTime).Milliseconds()
+
+	// Log COMPLETED or FAILED state
+	// Check both err != nil AND result.Status != success to catch OOM/timeout
+	if err != nil || result.Status != proxy.StatusSuccess {
+		// Log FAILED state
+		var errStr string
+		if err != nil {
+			errStr = err.Error()
+		} else if result.Error != "" {
+			errStr = result.Error
+		}
+		logExecEvent(execlog.StateFailed, &durationMs, &errStr)
+
 		writeJSON(w, http.StatusOK, RunResponse{
 			Status:     "error",
-			Error:      err.Error(),
-			DurationMs: 0,
+			Error:      errStr,
+			DurationMs: durationMs,
 		})
 		return
 	}
+
+	// Log COMPLETED state
+	logExecEvent(execlog.StateCompleted, &durationMs, nil)
 
 	// Convert proxy.Result to RunResponse
 	resp := RunResponse{
@@ -295,6 +368,24 @@ func (s *Server) executeViaPoolStreaming(w http.ResponseWriter, r *http.Request,
 		StreamCh:   streamCh,    // Enable streaming
 		SessionID:  sessionID,   // Session affinity (Phase 2)
 	}
+
+	// Log QUEUED state (best-effort, async)
+	go func() {
+		writer, err := execlog.NewWriter(s.execlogDir, agentName)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		err = writer.Log(&execlog.Event{
+			Timestamp: time.Now(),
+			RequestID: scalingReq.ID,
+			State:     execlog.StateQueued,
+			SessionID: ptrOrNil(scalingReq.SessionID),
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to log QUEUED: %v", err)
+		}
+	}()
 
 	// Enqueue request
 	if err := pool.queue.Enqueue(r.Context(), scalingReq); err != nil {
@@ -368,6 +459,31 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Generate request ID for execlog tracking
+	requestID := uuid.New().String()
+
+	// Helper to log execlog events (best-effort)
+	logExecEvent := func(state string, durationMs *int64, errMsg *string) {
+		writer, err := execlog.NewWriter(s.execlogDir, agent.Name)
+		if err != nil {
+			log.Printf("Warning: Failed to create execlog writer: %v", err)
+			return
+		}
+		event := &execlog.Event{
+			Timestamp:  time.Now(),
+			RequestID:  requestID,
+			State:      state,
+			DurationMs: durationMs,
+			Error:      errMsg,
+		}
+		if err := writer.Log(event); err != nil {
+			log.Printf("Warning: Failed to log %s: %v", state, err)
+		}
+	}
+
+	// Log QUEUED state (async, best-effort)
+	go logExecEvent(execlog.StateQueued, nil, nil)
+
 	// Create SSE writer and verify streaming is supported
 	sseWriter := runtime.NewSSEWriter(w)
 	if sseWriter == nil {
@@ -382,7 +498,7 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
 
-	// Generate agent ID
+	// Generate agent ID (for running agent tracking, separate from request ID)
 	agentID := fmt.Sprintf("agent-%s", uuid.New().String()[:8])
 
 	// Send init event
@@ -441,16 +557,33 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		fullReq.Env[k] = v
 	}
 
-	// Execute agent with streaming
-	result, err := ExecuteStreaming(ctx, fullReq, sseWriter)
+	// Log STARTED state and track execution time
+	logExecEvent(execlog.StateStarted, nil, nil)
+	startTime := time.Now()
+
+	// Execute agent with streaming (pass ServiceManager for model server management)
+	result, err := ExecuteStreaming(ctx, fullReq, sseWriter, s.serviceManager)
+
+	// Calculate duration
+	durationMs := time.Since(startTime).Milliseconds()
 
 	// Send error event if execution failed
-	if err != nil {
+	// Check both err != nil AND result.Status != success to catch OOM/timeout
+	if err != nil || result.Status != proxy.StatusSuccess {
+		// Log FAILED state
+		var errStr string
+		if err != nil {
+			errStr = err.Error()
+		} else if result.Error != "" {
+			errStr = result.Error
+		}
+		logExecEvent(execlog.StateFailed, &durationMs, &errStr)
+
 		sseWriter.WriteEvent(&runtime.StreamEvent{
 			Type:      "error",
 			Timestamp: time.Now(),
 			Data: map[string]interface{}{
-				"error":       err.Error(),
+				"error":       errStr,
 				"duration_ms": time.Since(runningAgent.StartedAt).Milliseconds(),
 			},
 		})
@@ -464,6 +597,9 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
+
+	// Log COMPLETED state
+	logExecEvent(execlog.StateCompleted, &durationMs, nil)
 
 	// Send completed event with final result
 	sseWriter.WriteEvent(&runtime.StreamEvent{
@@ -510,15 +646,121 @@ func (s *Server) handleGetAgentByName(w http.ResponseWriter, agentName string) {
 		return
 	}
 
-	// Return agent details (without exposing full env var values)
+	// Build response with basic registry data
 	response := map[string]interface{}{
 		"name":       agent.Name,
+		"runtime":    agent.Runtime,
 		"created_at": agent.CreatedAt,
 		"updated_at": agent.UpdatedAt,
 		"env_vars":   extractEnvKeys(agent.ResolvedEnv), // Just keys, not values
 	}
 
+	// Load full agent config from agent.yaml to get additional fields
+	agentCfg, cfgErr := config.Load(agent.Path)
+	if cfgErr == nil {
+		// Add fields from agent.yaml
+		response["module"] = agentCfg.Module
+		response["entrypoint"] = agentCfg.Entrypoint
+
+		// Memory and timeout
+		if agentCfg.Memory > 0 {
+			response["memory"] = agentCfg.Memory
+		}
+		if agentCfg.TimeoutSec > 0 {
+			response["timeout"] = agentCfg.TimeoutSec
+		}
+
+		// Model/Engine (ServiceManager integration)
+		if agentCfg.Model != "" {
+			response["model"] = agentCfg.Model
+		}
+		if agentCfg.Engine != "" {
+			response["engine"] = agentCfg.Engine
+		}
+
+		// Session config
+		if agentCfg.Session.Enabled {
+			response["session"] = map[string]interface{}{
+				"enabled":      agentCfg.Session.Enabled,
+				"key":          agentCfg.Session.Key,
+				"ttl":          agentCfg.Session.TTL.String(),
+				"wait_timeout": agentCfg.Session.WaitTimeout.String(),
+			}
+		}
+
+		// Telemetry config (custom labels)
+		if len(agentCfg.Telemetry.Labels) > 0 {
+			response["telemetry"] = map[string]interface{}{
+				"enabled": agentCfg.Telemetry.IsEnabled(),
+				"labels":  agentCfg.Telemetry.Labels,
+			}
+		}
+	}
+
+	// Load scaling config separately (same pattern as pool_manager)
+	scalingCfg := s.loadAgentScalingConfig(agent.Path)
+	if scalingCfg != nil {
+		response["scaling"] = scalingCfg
+	}
+
 	writeJSON(w, http.StatusOK, response)
+}
+
+// loadAgentScalingConfig loads scaling configuration from agent.yaml.
+func (s *Server) loadAgentScalingConfig(agentPath string) map[string]interface{} {
+	agentYAML := filepath.Join(agentPath, "agent.yaml")
+	data, err := os.ReadFile(agentYAML)
+	if err != nil {
+		return nil
+	}
+
+	var cfg struct {
+		Scaling struct {
+			MinWorkers         int     `yaml:"min_workers"`
+			MaxWorkers         int     `yaml:"max_workers"`
+			TargetUtilization  float64 `yaml:"target_utilization"`
+			ScaleUpThreshold   float64 `yaml:"scale_up_threshold"`
+			ScaleDownThreshold float64 `yaml:"scale_down_threshold"`
+			ScaleUpDelay       string  `yaml:"scale_up_delay"`
+			ScaleDownDelay     string  `yaml:"scale_down_delay"`
+			QueueSize          int     `yaml:"queue_size"`
+		} `yaml:"scaling"`
+	}
+
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+
+	// Only return if scaling was explicitly configured
+	if cfg.Scaling.MinWorkers == 0 && cfg.Scaling.MaxWorkers == 0 {
+		return nil
+	}
+
+	result := map[string]interface{}{
+		"min_workers": cfg.Scaling.MinWorkers,
+		"max_workers": cfg.Scaling.MaxWorkers,
+	}
+
+	if cfg.Scaling.TargetUtilization > 0 {
+		result["target_utilization"] = cfg.Scaling.TargetUtilization
+	}
+	if cfg.Scaling.ScaleUpThreshold > 0 {
+		result["scale_up_threshold"] = cfg.Scaling.ScaleUpThreshold
+	}
+	if cfg.Scaling.ScaleDownThreshold > 0 {
+		result["scale_down_threshold"] = cfg.Scaling.ScaleDownThreshold
+	}
+	if cfg.Scaling.ScaleUpDelay != "" {
+		result["scale_up_delay"] = cfg.Scaling.ScaleUpDelay
+	}
+	if cfg.Scaling.ScaleDownDelay != "" {
+		result["scale_down_delay"] = cfg.Scaling.ScaleDownDelay
+	}
+	if cfg.Scaling.QueueSize > 0 {
+		result["queue_size"] = cfg.Scaling.QueueSize
+	}
+
+	return result
 }
 
 // handleDeleteAgentByName unregisters an agent and removes its files.
@@ -1012,5 +1254,296 @@ func (s *Server) handleWorkspaceClean(w http.ResponseWriter, r *http.Request, ag
 		Status:     "success",
 		AgentName:  agentName,
 		FreedBytes: sizeBytes,
+	})
+}
+
+// ptrOrNil returns a pointer to the string, or nil if empty
+func ptrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// handleExecLogCrashed returns all crashed requests across all agents
+// GET /v1/execlog/crashed
+func (s *Server) handleExecLogCrashed(w http.ResponseWriter, r *http.Request) {
+	// Only support GET
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Get all deployed agents
+	agents, err := s.registry.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list agents: %v", err))
+		return
+	}
+
+	// Query each agent's execlog for crashed requests
+	var allCrashed []map[string]interface{}
+
+	for _, agent := range agents {
+		reader, err := execlog.NewReader(s.execlogDir, agent.Name)
+		if err != nil {
+			// Skip if execlog doesn't exist for this agent
+			continue
+		}
+
+		crashed, err := reader.GetCrashedRequests()
+		reader.Close()
+
+		if err != nil {
+			log.Printf("Warning: Failed to read crashed for %s: %v", agent.Name, err)
+			continue
+		}
+
+		// Convert to response format
+		for _, req := range crashed {
+			crashedMap := map[string]interface{}{
+				"request_id":  req.RequestID,
+				"agent_name":  agent.Name,
+				"worker_id":   req.WorkerID,
+				"started_at":  req.StartedAt.Format(time.RFC3339),
+			}
+			if req.SessionID != nil {
+				crashedMap["session_id"] = *req.SessionID
+			}
+			allCrashed = append(allCrashed, crashedMap)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"crashed_requests": allCrashed,
+		"count":            len(allCrashed),
+	})
+}
+
+// handleExecLog returns filtered and paginated execution logs
+// GET /v1/execlog?agent=xxx&status=xxx&session=xxx&worker=xxx&limit=50&offset=0
+func (s *Server) handleExecLog(w http.ResponseWriter, r *http.Request) {
+	// Only support GET
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Parse query parameters
+	agentFilter := r.URL.Query().Get("agent")
+	statusFilter := r.URL.Query().Get("status")
+	sessionFilter := r.URL.Query().Get("session")
+	workerFilter := r.URL.Query().Get("worker")
+
+	// Parse pagination (default limit: 50, max: 1000)
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	// Get all deployed agents
+	agents, err := s.registry.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list agents: %v", err))
+		return
+	}
+
+	// Filter agents if specified
+	var filteredAgents []registry.RegisteredAgent
+	if agentFilter != "" {
+		for _, agent := range agents {
+			if agent.Name == agentFilter {
+				filteredAgents = append(filteredAgents, agent)
+				break
+			}
+		}
+	} else {
+		filteredAgents = agents
+	}
+
+	// Query each agent's execlog
+	var allLogs []map[string]interface{}
+	totalCount := 0
+
+	for _, agent := range filteredAgents {
+		reader, err := execlog.NewReader(s.execlogDir, agent.Name)
+		if err != nil {
+			continue // Skip if no execlog for this agent
+		}
+
+		// Build filters
+		filters := &execlog.ExecLogFilters{
+			Status:    statusFilter,
+			WorkerID:  workerFilter,
+			SessionID: sessionFilter,
+			Limit:     limit,
+			Offset:    offset,
+		}
+
+		// Get logs
+		logs, err := reader.GetExecutionLogs(filters)
+		if err != nil {
+			log.Printf("Warning: Failed to query logs for %s: %v", agent.Name, err)
+			reader.Close()
+			continue
+		}
+
+		// Get total count
+		count, err := reader.GetExecutionLogsCount(filters)
+		reader.Close()
+
+		if err != nil {
+			log.Printf("Warning: Failed to count logs for %s: %v", agent.Name, err)
+		} else {
+			totalCount += count
+		}
+
+		// Convert to response format
+		for _, entry := range logs {
+			logMap := map[string]interface{}{
+				"request_id": entry.RequestID,
+				"agent_name": agent.Name,
+				"state":      entry.State,
+				"timestamp":  time.Unix(0, entry.Timestamp).Format(time.RFC3339),
+			}
+			if entry.WorkerID != nil {
+				logMap["worker_id"] = *entry.WorkerID
+			}
+			if entry.SessionID != nil {
+				logMap["session_id"] = *entry.SessionID
+			}
+			if entry.DurationMs != nil {
+				logMap["duration_ms"] = *entry.DurationMs
+			}
+			if entry.Error != nil {
+				logMap["error"] = *entry.Error
+			}
+
+			allLogs = append(allLogs, logMap)
+		}
+	}
+
+	// Calculate pagination metadata
+	page := (offset / limit) + 1
+	totalPages := 0
+	if totalCount > 0 {
+		totalPages = (totalCount + limit - 1) / limit
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"data":        allLogs,
+		"count":       len(allLogs),
+		"total":       totalCount,
+		"page":        page,
+		"limit":       limit,
+		"offset":      offset,
+		"total_pages": totalPages,
+	})
+}
+
+// handleExecLogStats returns aggregated execution statistics
+// GET /v1/execlog/stats?agent=<name>
+func (s *Server) handleExecLogStats(w http.ResponseWriter, r *http.Request) {
+	// Only support GET
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	agentFilter := r.URL.Query().Get("agent")
+
+	// Get all deployed agents
+	agents, err := s.registry.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list agents: %v", err))
+		return
+	}
+
+	// Filter agents if specified
+	var targetAgents []registry.RegisteredAgent
+	if agentFilter != "" {
+		for _, agent := range agents {
+			if agent.Name == agentFilter {
+				targetAgents = append(targetAgents, agent)
+				break
+			}
+		}
+	} else {
+		targetAgents = agents
+	}
+
+	// Collect stats from each agent
+	var agentStats []map[string]interface{}
+	globalTotal := 0
+	globalCompleted := 0
+	globalFailed := 0
+	globalCrashed := 0
+	globalAvgDuration := 0.0
+	agentCount := 0
+
+	for _, agent := range targetAgents {
+		reader, err := execlog.NewReader(s.execlogDir, agent.Name)
+		if err != nil {
+			continue // Skip agents without execlog
+		}
+
+		stats, err := reader.GetStats()
+		reader.Close()
+
+		if err != nil {
+			log.Printf("Warning: Failed to get stats for %s: %v", agent.Name, err)
+			continue
+		}
+
+		// Aggregate global
+		globalTotal += stats.Total
+		globalCompleted += stats.Completed
+		globalFailed += stats.Failed
+		globalCrashed += stats.Crashed
+		globalAvgDuration += stats.AvgDuration
+		agentCount++
+
+		// Add to response
+		agentStats = append(agentStats, map[string]interface{}{
+			"agent_name":      agent.Name,
+			"total":           stats.Total,
+			"completed":       stats.Completed,
+			"failed":          stats.Failed,
+			"crashed":         stats.Crashed,
+			"success_rate":    stats.SuccessRate,
+			"avg_duration_ms": stats.AvgDuration,
+			"health_status":   stats.HealthStatus,
+		})
+	}
+
+	// Calculate global metrics
+	globalSuccessRate := 0.0
+	if globalTotal > 0 {
+		globalSuccessRate = float64(globalCompleted) / float64(globalTotal) * 100.0
+	}
+	if agentCount > 0 {
+		globalAvgDuration = globalAvgDuration / float64(agentCount)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"agents": agentStats,
+		"global": map[string]interface{}{
+			"total_requests":  globalTotal,
+			"completed":       globalCompleted,
+			"failed":          globalFailed,
+			"crashed":         globalCrashed,
+			"success_rate":    globalSuccessRate,
+			"avg_duration_ms": globalAvgDuration,
+		},
+		"timestamp": time.Now().Format(time.RFC3339),
 	})
 }

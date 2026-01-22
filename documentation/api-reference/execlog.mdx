@@ -1,0 +1,74 @@
+---
+title: 'ExecLog API'
+api: 'GET /v1/execlog'
+description: 'Query execution history'
+---
+
+## Request
+
+```http
+GET /v1/execlog?agent={name}&limit={n}&state={state}
+```
+
+## Query Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `agent` | string | Filter by agent name |
+| `limit` | int | Max results (default: 50) |
+| `state` | string | Filter: `completed`, `failed`, `crashed` |
+
+## cURL Example
+
+```bash
+# All executions for an agent
+curl "http://localhost:7777/v1/execlog?agent=my-agent&limit=10"
+
+# Only failed
+curl "http://localhost:7777/v1/execlog?agent=my-agent&state=failed"
+```
+
+## Response
+
+```json
+{
+  "executions": [
+    {
+      "request_id": "abc-123",
+      "agent_name": "my-agent",
+      "worker_id": "my-agent-worker-1",
+      "session_id": "user-456",
+      "state": "completed",
+      "started_at": "2026-01-19T10:15:00Z",
+      "completed_at": "2026-01-19T10:15:02Z",
+      "duration_ms": 2000,
+      "error": null
+    }
+  ],
+  "total": 1
+}
+```
+
+## States
+
+| State | Description |
+|-------|-------------|
+| `queued` | Waiting for worker |
+| `started` | Currently executing |
+| `completed` | Finished successfully |
+| `failed` | Handler returned error |
+| `crashed` | Daemon died mid-execution |
+
+## CLI Equivalent
+
+```bash
+# List recent runs
+orpheus runs my-agent -n 10
+
+# Filter by state
+orpheus runs my-agent --state failed
+```
+
+<Card title="Back to API" icon="book" href="/api-reference/introduction">
+  ← API Overview
+</Card>

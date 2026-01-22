@@ -1,0 +1,94 @@
+---
+title: 'Debug with ExecLog'
+description: 'Use execution logs to find what went wrong'
+---
+
+Every request is tracked in ExecLog. Use it to debug issues.
+
+## View Recent Executions
+
+```bash
+orpheus runs my-agent
+```
+
+**Output:**
+```
+REQUEST_ID                            STATE      DURATION  WORKER
+a1b2c3d4-e5f6-7890-abcd-ef1234567890  completed  1.2s      my-agent-worker-1
+b2c3d4e5-f6a7-8901-bcde-f12345678901  failed     0.8s      my-agent-worker-2
+c3d4e5f6-a7b8-9012-cdef-123456789012  completed  2.1s      my-agent-worker-1
+```
+
+## Filter by State
+
+```bash
+# Only failed requests
+orpheus runs my-agent --state failed
+
+# Only crashed (daemon died mid-request)
+orpheus runs my-agent --state crashed
+```
+
+## Request States
+
+| State | Meaning |
+|-------|---------|
+| `queued` | Waiting for worker |
+| `started` | Currently executing |
+| `completed` | Finished successfully |
+| `failed` | Handler returned error |
+| `crashed` | Daemon died during execution |
+
+## Debug a Failed Request
+
+1. **Find the failed request:**
+   ```bash
+   orpheus runs my-agent --state failed
+   ```
+
+2. **Get details:**
+   ```bash
+   curl "http://localhost:7777/v1/execlog?agent=my-agent&state=failed&limit=1"
+   ```
+
+3. **Check the error message in response**
+
+## Find Crashed Requests
+
+Crashed = daemon died while request was running
+
+```bash
+orpheus runs my-agent --state crashed
+```
+
+Crashed requests are NOT auto-retried (safe-first design). You decide:
+- Safe to retry? Run it again
+- Has side effects? Investigate first
+
+## API Access
+
+```bash
+# Get last 10 executions
+curl "http://localhost:7777/v1/execlog?agent=my-agent&limit=10"
+
+# Filter by state
+curl "http://localhost:7777/v1/execlog?agent=my-agent&state=failed"
+```
+
+## What Gets Logged
+
+| Field | Description |
+|-------|-------------|
+| `request_id` | Unique ID for this execution |
+| `agent_name` | Which agent |
+| `worker_id` | Which worker handled it |
+| `session_id` | Session (if provided) |
+| `state` | Current state |
+| `started_at` | When execution began |
+| `completed_at` | When execution ended |
+| `duration_ms` | How long it took |
+| `error` | Error message (if failed) |
+
+<Card title="FAQ" icon="question" href="/troubleshooting/faq">
+  Quick answers →
+</Card>

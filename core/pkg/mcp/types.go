@@ -2,12 +2,6 @@ package mcp
 
 import "time"
 
-// MCPRoute represents a parsed MCP URL path.
-type MCPRoute struct {
-	OrgID     string // Organization identifier
-	AgentName string // Agent name
-}
-
 // MCPConfig configures MCP server behavior.
 type MCPConfig struct {
 	Enabled         bool          // Enable MCP endpoints

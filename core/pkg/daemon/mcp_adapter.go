@@ -103,8 +103,8 @@ func (q *daemonDirectQueue) Enqueue(req mcp.Request) error {
 			Input:     inputMap,
 		}
 
-		// Execute using daemon's executor
-		result, err := Execute(ctx, runReq)
+		// Execute using daemon's executor (pass ServiceManager for model server management)
+		result, err := Execute(ctx, runReq, q.server.serviceManager)
 
 		// Build MCP response
 		resp := &daemonMCPResponse{

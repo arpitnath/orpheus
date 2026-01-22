@@ -16,6 +16,10 @@ import type {
   DeployOptions,
   WorkspaceInfoResponse,
   WorkspaceCleanResponse,
+  CrashedRequestsResponse,
+  ExecLogFilters,
+  ExecLogsResponse,
+  ExecLogStatsResponse,
 } from '../types/index.js';
 
 //@HTTP_CLIENT
@@ -66,9 +70,6 @@ async function makeRequest<T>(
         method,
         headers: {
           'Content-Type': 'application/json',
-          ...(serverConfig.auth_key && {
-            Authorization: `Bearer ${serverConfig.auth_key}`,
-          }),
         },
         timeout,
         agent: false, // Disable connection pooling to prevent header issues
@@ -210,6 +211,36 @@ export function createClient(_serverName?: string): OrpheusClient {
         `/v1/agents/${encodeURIComponent(agentName)}/workspace`,
         serverConfig
       );
+    },
+
+    async getCrashedRequests(): Promise<CrashedRequestsResponse> {
+      return makeRequest<CrashedRequestsResponse>(
+        'GET',
+        '/v1/execlog/crashed',
+        serverConfig
+      );
+    },
+
+    async getExecLogs(filters?: ExecLogFilters): Promise<ExecLogsResponse> {
+      const params = new URLSearchParams();
+      if (filters?.agent) params.append('agent', filters.agent);
+      if (filters?.status) params.append('status', filters.status);
+      if (filters?.session) params.append('session', filters.session);
+      if (filters?.worker) params.append('worker', filters.worker);
+      if (filters?.limit) params.append('limit', String(filters.limit));
+      if (filters?.offset) params.append('offset', String(filters.offset));
+
+      const query = params.toString();
+      const path = `/v1/execlog${query ? '?' + query : ''}`;
+
+      return makeRequest<ExecLogsResponse>('GET', path, serverConfig);
+    },
+
+    async getExecLogStats(agentName?: string): Promise<ExecLogStatsResponse> {
+      const path = agentName
+        ? `/v1/execlog/stats?agent=${encodeURIComponent(agentName)}`
+        : '/v1/execlog/stats';
+      return makeRequest<ExecLogStatsResponse>('GET', path, serverConfig);
     },
 
     close(): void {

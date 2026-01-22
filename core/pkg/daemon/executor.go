@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,18 +13,67 @@ import (
 	"orpheus/daemon/pkg/generator"
 	"orpheus/daemon/pkg/proxy"
 	"orpheus/daemon/pkg/runtime"
+	"orpheus/daemon/pkg/service"
 )
 
 // Execute runs an agent using the existing proxy.RunAgent infrastructure.
 // This is the bridge between the daemon API and the execution engine.
-func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
+// serviceManager is optional - pass nil for agents that don't need model servers.
+func Execute(ctx context.Context, req *RunRequest, serviceManager *service.Manager) (*proxy.Result, error) {
 	// Load agent config
 	cfg, err := config.Load(req.AgentPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	// Merge runtime environment variable overrides
+	// If agent specifies a model, use ServiceManager to ensure model server is running
+	if cfg.Model != "" {
+		// Check if user already set OPENAI_BASE_URL (user's env takes priority)
+		hasBaseURL := false
+		hasAPIKey := false
+		for _, env := range cfg.Env {
+			if len(env) > 16 && env[:16] == "OPENAI_BASE_URL=" {
+				hasBaseURL = true
+			}
+			if len(env) > 15 && env[:15] == "OPENAI_API_KEY=" {
+				hasAPIKey = true
+			}
+		}
+
+		// Only inject if not user-provided
+		if !hasBaseURL {
+			// ServiceManager is required for model server management
+			if serviceManager == nil {
+				return nil, fmt.Errorf("agent requires model '%s' but ServiceManager is not available", cfg.Model)
+			}
+
+			modelConfig := service.ModelConfig{
+				Name:   cfg.Model,
+				Server: cfg.Engine, // Use agent's engine field; empty triggers auto-detect
+			}
+			modelEndpoint, err := serviceManager.EnsureModelServer(ctx, modelConfig)
+			if err != nil {
+				return nil, fmt.Errorf("failed to ensure model server for '%s': %w", cfg.Model, err)
+			}
+
+			log.Printf("[executor] ServiceManager provided endpoint: %s", modelEndpoint)
+			cfg.Env = append(cfg.Env,
+				"MODEL_URL="+modelEndpoint,
+				"OPENAI_BASE_URL="+modelEndpoint+"/v1",
+				"MODEL_NAME="+cfg.Model,
+				"OLLAMA_MODEL="+cfg.Model, // For backwards compatibility
+			)
+		}
+		if !hasAPIKey {
+			cfg.Env = append(cfg.Env,
+				"OPENAI_API_KEY=orpheus-internal-key",
+			)
+		}
+
+		log.Printf("[executor] Agent uses model '%s'", cfg.Model)
+	}
+
+	// Merge runtime environment variable overrides (after auto-injection)
 	if len(req.Env) > 0 {
 		for k, v := range req.Env {
 			cfg.Env = append(cfg.Env, k+"="+v)
@@ -76,7 +126,8 @@ func Execute(ctx context.Context, req *RunRequest) (*proxy.Result, error) {
 
 // ExecuteStreaming runs an agent with real-time SSE output streaming.
 // Similar to Execute() but passes streamWriter for real-time event emission.
-func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime.StreamWriter) (*proxy.Result, error) {
+// serviceManager is optional - pass nil for agents that don't need model servers.
+func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime.StreamWriter, serviceManager *service.Manager) (*proxy.Result, error) {
 	// Load agent config
 	cfg, err := config.Load(req.AgentPath)
 	if err != nil {
@@ -88,6 +139,53 @@ func ExecuteStreaming(ctx context.Context, req *RunRequest, streamWriter runtime
 		for k, v := range req.Env {
 			cfg.Env = append(cfg.Env, k+"="+v)
 		}
+	}
+
+	// If agent specifies a model, use ServiceManager to ensure model server is running
+	if cfg.Model != "" {
+		// Check if user already set OPENAI_BASE_URL (user's env takes priority)
+		hasBaseURL := false
+		hasAPIKey := false
+		for _, env := range cfg.Env {
+			if len(env) > 16 && env[:16] == "OPENAI_BASE_URL=" {
+				hasBaseURL = true
+			}
+			if len(env) > 15 && env[:15] == "OPENAI_API_KEY=" {
+				hasAPIKey = true
+			}
+		}
+
+		// Only inject if not user-provided
+		if !hasBaseURL {
+			// ServiceManager is required for model server management
+			if serviceManager == nil {
+				return nil, fmt.Errorf("agent requires model '%s' but ServiceManager is not available", cfg.Model)
+			}
+
+			modelConfig := service.ModelConfig{
+				Name:   cfg.Model,
+				Server: cfg.Engine, // Use agent's engine field; empty triggers auto-detect
+			}
+			modelEndpoint, err := serviceManager.EnsureModelServer(ctx, modelConfig)
+			if err != nil {
+				return nil, fmt.Errorf("failed to ensure model server for '%s': %w", cfg.Model, err)
+			}
+
+			log.Printf("[executor] ServiceManager provided endpoint: %s", modelEndpoint)
+			cfg.Env = append(cfg.Env,
+				"MODEL_URL="+modelEndpoint,
+				"OPENAI_BASE_URL="+modelEndpoint+"/v1",
+				"MODEL_NAME="+cfg.Model,
+				"OLLAMA_MODEL="+cfg.Model, // For backwards compatibility
+			)
+		}
+		if !hasAPIKey {
+			cfg.Env = append(cfg.Env,
+				"OPENAI_API_KEY=orpheus-internal-key",
+			)
+		}
+
+		log.Printf("[executor] Agent uses model '%s'", cfg.Model)
 	}
 
 	// Generate entrypoint
@@ -178,14 +276,20 @@ func resolveWorkspacePath(agentPath string) string {
 }
 
 // resolveImagePath determines the rootfs path for the agent.
-// It checks for deployed images in ~/.orpheus/agents/{name}/
-// and falls back to the agent directory if not deployed.
+// It checks for deployed images in multiple locations and
+// falls back to the agent directory if not deployed.
 //
 // With base image merging, the directory structure is:
-//   ~/.orpheus/agents/{name}/        <- rootfs (lib, usr, etc)
-//   ~/.orpheus/agents/{name}/agent/  <- agent code (agent.yaml, etc)
+//   {base}/agents/{name}/        <- rootfs (lib, usr, etc)
+//   {base}/agents/{name}/agent/  <- agent code (agent.yaml, etc)
 //
 // The agentPath may point to either the rootfs or the agent code directory.
+//
+// Search order:
+//  1. System-wide: /var/lib/orpheus/agents/{name}
+//  2. User home: ~/.orpheus/agents/{name}
+//  3. Lima/Docker mounted macOS home (if path contains /Users/)
+//  4. Original agentPath's parent (if agentPath ends in /agent)
 func resolveImagePath(agentPath string) string {
 	// Get agent name from path
 	// If path ends with /agent, use parent directory name
@@ -195,36 +299,41 @@ func resolveImagePath(agentPath string) string {
 		agentName = filepath.Base(filepath.Dir(agentPath))
 	}
 
-	// Try multiple possible home directories:
-	// 1. Current user's home (daemon might run as different user)
-	// 2. Extract home from agent path (for Lima/Docker scenarios where macOS home is mounted)
-	homeDirs := []string{}
+	// Build list of candidate paths to check
+	candidatePaths := []string{}
 
-	// Add current user home
+	// 1. System-wide path (most common for production/EC2)
+	candidatePaths = append(candidatePaths, filepath.Join("/var/lib/orpheus/agents", agentName))
+
+	// 2. User home path
 	if home, err := os.UserHomeDir(); err == nil {
-		homeDirs = append(homeDirs, home)
+		candidatePaths = append(candidatePaths, filepath.Join(home, ".orpheus", "agents", agentName))
 	}
 
-	// Extract home directory from agent path if it looks like /Users/<name>/...
-	// This handles Lima VM where macOS home is mounted at same path
+	// 3. Extract home from agent path for Lima/Docker scenarios
+	// where macOS home is mounted at same path
 	if len(agentPath) > 7 && agentPath[:7] == "/Users/" {
 		// Find the home directory by locating the second slash after /Users/
 		for i := 7; i < len(agentPath); i++ {
 			if agentPath[i] == '/' {
-				homeDirs = append(homeDirs, agentPath[:i])
+				macHome := agentPath[:i]
+				candidatePaths = append(candidatePaths, filepath.Join(macHome, ".orpheus", "agents", agentName))
 				break
 			}
 		}
 	}
 
-	// Use deployed agent image
-	// Try each home directory until we find a valid deployed agent
-	for _, home := range homeDirs {
-		deployedPath := filepath.Join(home, ".orpheus", "agents", agentName)
+	// 4. If agentPath ends in /agent, the parent directory might be the rootfs
+	if filepath.Base(agentPath) == "agent" {
+		parentPath := filepath.Dir(agentPath)
+		candidatePaths = append(candidatePaths, parentPath)
+	}
 
+	// Try each candidate path until we find a valid rootfs
+	for _, path := range candidatePaths {
 		// Verify it's a complete rootfs (must have /lib for dynamic linker)
-		if _, err := os.Stat(filepath.Join(deployedPath, "lib")); err == nil {
-			return deployedPath
+		if _, err := os.Stat(filepath.Join(path, "lib")); err == nil {
+			return path
 		}
 	}
 

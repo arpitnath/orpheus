@@ -1,0 +1,151 @@
+---
+title: 'CLI Commands'
+description: 'Complete command reference'
+---
+
+## Deployment
+
+### deploy
+Deploy an agent from a directory.
+
+```bash
+orpheus deploy <path>
+```
+
+**Example:**
+```bash
+orpheus deploy ./my-agent
+```
+
+---
+
+### undeploy
+Remove a deployed agent.
+
+```bash
+orpheus undeploy <name>
+```
+
+**Warning:** This deletes the workspace.
+
+---
+
+### list
+List all deployed agents.
+
+```bash
+orpheus list
+```
+
+---
+
+## Execution
+
+### run
+Execute an agent with JSON input.
+
+```bash
+orpheus run <name> '<json>'
+```
+
+**Options:**
+- `--session <id>` - Session ID for affinity
+
+**Example:**
+```bash
+orpheus run my-agent '{"query": "hello"}' --session user-123
+```
+
+---
+
+## Monitoring
+
+### status
+Check daemon health.
+
+```bash
+orpheus status
+```
+
+---
+
+### stats
+View agent statistics.
+
+```bash
+orpheus stats <name>
+```
+
+Shows workers, queue depth, health status.
+
+---
+
+### runs
+View execution history.
+
+```bash
+orpheus runs <name>
+```
+
+**Options:**
+- `-n <count>` - Number of results
+- `--state <state>` - Filter by state (completed, failed, crashed)
+
+**Example:**
+```bash
+orpheus runs my-agent -n 10 --state failed
+```
+
+---
+
+## Workspace
+
+### workspace info
+View workspace details.
+
+```bash
+orpheus workspace info <name>
+```
+
+---
+
+### workspace clean
+Delete workspace contents.
+
+```bash
+orpheus workspace clean <name> --force
+```
+
+---
+
+## VM (macOS only)
+
+### vm start
+Start the Lima VM.
+
+```bash
+orpheus vm start
+```
+
+---
+
+### vm stop
+Stop the Lima VM.
+
+```bash
+orpheus vm stop
+```
+
+---
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `ORPHEUS_URL` | Daemon URL (default: `http://localhost:7777`) |
+| `ORPHEUS_SOCKET` | Unix socket path |
+
+**Example:**
+```bash
+ORPHEUS_URL=http://192.168.1.100:7777 orpheus status
+```

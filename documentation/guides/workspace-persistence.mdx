@@ -1,0 +1,180 @@
+---
+title: 'Persist Data with Workspaces'
+description: 'Store files that survive across requests and restarts'
+---
+
+Every agent has a workspace directory that persists forever.
+
+## The Basics
+
+Files written to `/workspace` survive:
+- Container restarts
+- Worker replacements
+- Daemon restarts
+- Redeployments
+
+```python
+def handler(input_data):
+    # Write a file
+    with open('/workspace/data.json', 'w') as f:
+        f.write('{"count": 1}')
+
+    # Read it back (even in future requests)
+    with open('/workspace/data.json') as f:
+        data = f.read()
+
+    return {'saved': True}
+```
+
+## Example: Persistent Counter
+
+```python
+import os
+
+def handler(input_data):
+    counter_file = '/workspace/counter.txt'
+
+    # Read current count
+    count = 0
+    if os.path.exists(counter_file):
+        with open(counter_file) as f:
+            count = int(f.read())
+
+    # Increment
+    count += 1
+
+    # Save
+    with open(counter_file, 'w') as f:
+        f.write(str(count))
+
+    return {'count': count}
+```
+
+**Test it:**
+```bash
+orpheus run my-agent '{}'  # {"count": 1}
+orpheus run my-agent '{}'  # {"count": 2}
+orpheus run my-agent '{}'  # {"count": 3}
+```
+
+## Common Patterns
+
+### Cache API Responses
+
+```python
+import os
+import json
+import hashlib
+
+def handler(input_data):
+    query = input_data.get('query')
+    cache_key = hashlib.md5(query.encode()).hexdigest()
+    cache_file = f'/workspace/cache/{cache_key}.json'
+
+    # Check cache
+    if os.path.exists(cache_file):
+        with open(cache_file) as f:
+            return json.load(f)
+
+    # Call API
+    result = call_expensive_api(query)
+
+    # Save to cache
+    os.makedirs('/workspace/cache', exist_ok=True)
+    with open(cache_file, 'w') as f:
+        json.dump(result, f)
+
+    return result
+```
+
+### Store Conversation History
+
+```python
+import json
+import os
+
+def save_history(session_id, history):
+    os.makedirs('/workspace/sessions', exist_ok=True)
+    with open(f'/workspace/sessions/{session_id}.json', 'w') as f:
+        json.dump(history, f)
+
+def load_history(session_id):
+    path = f'/workspace/sessions/{session_id}.json'
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return []
+```
+
+### SQLite Database
+
+```python
+import sqlite3
+
+def handler(input_data):
+    # SQLite works in workspace
+    conn = sqlite3.connect('/workspace/data.db')
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS logs
+        (id INTEGER PRIMARY KEY, message TEXT)
+    ''')
+
+    cursor.execute('INSERT INTO logs (message) VALUES (?)',
+                   [input_data.get('message')])
+    conn.commit()
+
+    cursor.execute('SELECT COUNT(*) FROM logs')
+    count = cursor.fetchone()[0]
+
+    conn.close()
+    return {'total_logs': count}
+```
+
+## Directory Structure
+
+| Path | Persistence | Use For |
+|------|-------------|---------|
+| `/workspace` | Forever | Data, caches, databases |
+| `/agent` | Forever | Your code (read-only) |
+| `/tmp` | Per-request | Temporary processing |
+
+## Manage Workspace
+
+**View workspace info:**
+```bash
+orpheus workspace info my-agent
+```
+
+**Clean workspace:**
+```bash
+orpheus workspace clean my-agent --force
+```
+
+## Where Workspaces Live
+
+```
+~/.orpheus/workspaces/my-agent/
+├── counter.txt
+├── cache/
+│   └── abc123.json
+└── sessions/
+    └── user-123.json
+```
+
+## Workspace Survives Redeploy
+
+When you run `orpheus deploy`:
+- Code is replaced
+- Workspace is preserved
+
+This means you can update agent logic without losing data.
+
+<Warning>
+`orpheus undeploy` deletes the workspace permanently. Back up important files first.
+</Warning>
+
+<Card title="Next: Long-Running Tasks" icon="clock" href="/guides/long-running-tasks">
+  Handle tasks that run for minutes →
+</Card>
