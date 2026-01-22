@@ -13,6 +13,7 @@ import {
 } from './lib/deploy.js';
 import { renderApp } from './lib/render.js';
 import { DeployProgress } from './components/DeployProgress.js';
+import { RunProgress } from './components/RunProgress.js';
 import { Status } from './components/Status.js';
 import { AgentList } from './components/AgentList.js';
 import { ExecLogCrashed } from './components/ExecLogCrashed.js';
@@ -227,27 +228,53 @@ program
   .command('run <agent>')
   .description('Execute a deployed agent')
   .argument('[input]', 'Input JSON')
-  .action(async (agentName: string, inputArg?: string) => {
-    try {
-      const client = createClient();
-      const input = inputArg ? JSON.parse(inputArg) : {};
-      const result = await client.invoke(agentName, input);
+  .option('--raw', 'Raw output without TUI (for scripting)')
+  .action(async (agentName: string, inputArg?: string, options?: { raw?: boolean }) => {
+    const input = inputArg ? JSON.parse(inputArg) : {};
 
-      // Handle daemon response format: {status, output, duration_ms}
-      const isSuccess = result.status === 'success' || result.success;
-      const output = result.output ?? result.result;
+    // Raw mode for scripting - no TUI
+    if (options?.raw) {
+      try {
+        const client = createClient();
+        const result = await client.invoke(agentName, input);
+        const isSuccess = result.status === 'success' || result.success;
+        const output = result.output ?? result.result;
 
-      if (isSuccess) {
-        console.log(JSON.stringify(output, null, 2));
-      } else {
-        const errorMsg = result.error || (typeof output === 'object' && output && 'error' in output ? (output as {error: string}).error : 'Execution failed');
-        console.error(`\x1b[31mError:\x1b[0m ${errorMsg}`);
+        if (isSuccess) {
+          console.log(JSON.stringify(output, null, 2));
+        } else {
+          const errorMsg = result.error || (typeof output === 'object' && output && 'error' in output ? (output as {error: string}).error : 'Execution failed');
+          console.error(`\x1b[31mError:\x1b[0m ${errorMsg}`);
+          process.exit(1);
+        }
+      } catch (err) {
+        console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
         process.exit(1);
       }
-    } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
+      return;
     }
+
+    // TUI mode with spinner
+    const onRun = async () => {
+      const client = createClient();
+      const result = await client.invoke(agentName, input);
+      const isSuccess = result.status === 'success' || result.success || false;
+      const output = result.output ?? result.result;
+
+      return {
+        success: isSuccess,
+        output: output,
+        error: result.error || (typeof output === 'object' && output && 'error' in output ? (output as {error: string}).error : undefined),
+        duration_ms: result.duration_ms,
+      };
+    };
+
+    renderApp(
+      React.createElement(RunProgress, {
+        agentName,
+        onRun,
+      })
+    );
   });
 
 program
