@@ -86,10 +86,12 @@ export async function handler(inputData) {
     for (const block of response.content) {
       if (block.type === "text") {
         textResponse += block.text;
-      } else if (block.type === "tool_use") {
+      } else if (block.type === "tool_use" || block.type === "mcp_tool_use") {
         toolCalls.push({
           tool: block.name,
           input: block.input,
+          server_name: block.server_name || null,
+          type: block.type,
         });
       }
     }
@@ -97,6 +99,7 @@ export async function handler(inputData) {
     return {
       response: textResponse,
       tool_calls: toolCalls,
+      stop_reason: response.stop_reason,
       status: "success",
       agent: "agent-router",
       mcp_target: MCP_URL,

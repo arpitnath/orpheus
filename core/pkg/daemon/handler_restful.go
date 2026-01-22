@@ -168,13 +168,13 @@ func (s *Server) executeViaPool(w http.ResponseWriter, r *http.Request, agentNam
 		}
 		// Don't close - writer is cached and reused
 
-		source := execlog.SourceHTTP
+		
 		err = writer.Log(&execlog.Event{
 			Timestamp: time.Now(),
 			RequestID: scalingReq.ID,
 			State:     execlog.StateQueued,
 			SessionID: ptrOrNil(scalingReq.SessionID),
-			Source:    &source,
+			Source:    ptrString(execlog.SourceHTTP),
 		})
 		if err != nil {
 			log.Printf("Warning: Failed to log QUEUED: %v", err)
@@ -231,7 +231,6 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 	requestID := uuid.New().String()
 
 	// Helper to log execlog events (best-effort, non-blocking for QUEUED)
-	source := execlog.SourceHTTP
 	logExecEvent := func(state string, durationMs *int64, errMsg *string) {
 		writer, err := execlog.NewWriter(s.execlogDir, agent.Name)
 		if err != nil {
@@ -244,7 +243,7 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 			State:      state,
 			DurationMs: durationMs,
 			Error:      errMsg,
-			Source:     &source,
+			Source:     ptrString(execlog.SourceHTTP),
 		}
 		if err := writer.Log(event); err != nil {
 			log.Printf("Warning: Failed to log %s: %v", state, err)
@@ -380,13 +379,13 @@ func (s *Server) executeViaPoolStreaming(w http.ResponseWriter, r *http.Request,
 			log.Printf("Warning: Failed to create execlog writer: %v", err)
 			return
 		}
-		source := execlog.SourceHTTP
+		
 		err = writer.Log(&execlog.Event{
 			Timestamp: time.Now(),
 			RequestID: scalingReq.ID,
 			State:     execlog.StateQueued,
 			SessionID: ptrOrNil(scalingReq.SessionID),
-			Source:    &source,
+			Source:    ptrString(execlog.SourceHTTP),
 		})
 		if err != nil {
 			log.Printf("Warning: Failed to log QUEUED: %v", err)
@@ -469,7 +468,6 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 	requestID := uuid.New().String()
 
 	// Helper to log execlog events (best-effort)
-	source := execlog.SourceHTTP
 	logExecEvent := func(state string, durationMs *int64, errMsg *string) {
 		writer, err := execlog.NewWriter(s.execlogDir, agent.Name)
 		if err != nil {
@@ -482,7 +480,7 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 			State:      state,
 			DurationMs: durationMs,
 			Error:      errMsg,
-			Source:     &source,
+			Source:     ptrString(execlog.SourceHTTP),
 		}
 		if err := writer.Log(event); err != nil {
 			log.Printf("Warning: Failed to log %s: %v", state, err)
@@ -1380,7 +1378,7 @@ func (s *Server) handleExecLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query each agent's execlog
-	var allLogs []map[string]interface{}
+	allLogs := make([]map[string]interface{}, 0)
 	totalCount := 0
 
 	for _, agent := range filteredAgents {

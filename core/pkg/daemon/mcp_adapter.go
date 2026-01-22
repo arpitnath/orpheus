@@ -80,29 +80,28 @@ type daemonDirectQueue struct {
 
 // Enqueue executes the agent and sends response to the request's channel.
 func (q *daemonDirectQueue) Enqueue(req mcp.Request) error {
-	// Execute in a goroutine to not block the MCP handler
+
 	go func() {
 		ctx := context.Background()
 		requestID := uuid.New().String()
 
 		// Helper to log execlog events with MCP source
 		logExecEvent := func(state string, durationMs *int64, errMsg *string) {
-			agentName := filepath.Base(q.agentPath)
+
+			agentName := filepath.Base(filepath.Dir(q.agentPath))
 			writer, err := execlog.NewWriter(q.server.execlogDir, agentName)
 			if err != nil {
 				log.Printf("[mcp-adapter] execlog writer error: %v", err)
 				return
 			}
 
-			source := execlog.SourceMCP
 			event := &execlog.Event{
 				Timestamp:  time.Now(),
 				RequestID:  requestID,
 				State:      state,
 				DurationMs: durationMs,
 				Error:      errMsg,
-				Source:     &source,
-				// MCPCaller could be populated from MCP session context if available
+				Source:     ptrString(execlog.SourceMCP),
 			}
 
 			if err := writer.Log(event); err != nil {
@@ -110,17 +109,14 @@ func (q *daemonDirectQueue) Enqueue(req mcp.Request) error {
 			}
 		}
 
-		// Log QUEUED state
 		logExecEvent(execlog.StateQueued, nil, nil)
 
-		// Parse input from request
 		var inputMap map[string]interface{}
 		if err := json.Unmarshal(req.GetInput(), &inputMap); err != nil {
-			// Log FAILED state
+
 			errStr := fmt.Sprintf("parse input: %v", err)
 			logExecEvent(execlog.StateFailed, nil, &errStr)
 
-			// Send error response
 			errResp := &daemonMCPResponse{
 				err: fmt.Errorf("parse input: %w", err),
 			}
@@ -128,23 +124,19 @@ func (q *daemonDirectQueue) Enqueue(req mcp.Request) error {
 			return
 		}
 
-		// Log STARTED state
 		logExecEvent(execlog.StateStarted, nil, nil)
 		startTime := time.Now()
 
-		// Build RunRequest for daemon executor
 		runReq := &RunRequest{
 			AgentPath: q.agentPath,
 			Input:     inputMap,
 		}
 
-		// Execute using daemon's executor (pass ServiceManager for model server management)
 		result, err := Execute(ctx, runReq, q.server.serviceManager)
 
 		// Calculate duration
 		durationMs := time.Since(startTime).Milliseconds()
 
-		// Log COMPLETED or FAILED state
 		if err != nil || result.Status != proxy.StatusSuccess {
 			var errStr string
 			if err != nil {
@@ -157,13 +149,11 @@ func (q *daemonDirectQueue) Enqueue(req mcp.Request) error {
 			logExecEvent(execlog.StateCompleted, &durationMs, nil)
 		}
 
-		// Build MCP response
 		resp := &daemonMCPResponse{
 			result: result,
 			err:    err,
 		}
 
-		// Send to MCP request's response channel
 		req.GetResponseChannel() <- resp
 	}()
 

@@ -3,6 +3,8 @@ package execlog
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -29,7 +31,19 @@ func NewWriter(execlogDir, agentName string) (*Writer, error) {
 	defer writerCacheMu.Unlock()
 
 	if cached, exists := writerCache[agentName]; exists {
-		return cached, nil
+		// Validate cached connection is still healthy
+		if err := cached.db.Ping(); err != nil {
+			log.Printf("[execlog] Cached connection for %s is stale: %v", agentName, err)
+			delete(writerCache, agentName)
+			cached.db.Close()
+		} else {
+			return cached, nil
+		}
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(execlogDir, 0755); err != nil {
+		return nil, fmt.Errorf("create execlog directory: %w", err)
 	}
 
 	// Create new writer
@@ -39,6 +53,12 @@ func NewWriter(execlogDir, agentName string) (*Writer, error) {
 	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+
+	// Force connection to actually open (sql.Open is lazy)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
 	// Create schema
@@ -74,6 +94,7 @@ func createSchema(db *sql.DB) error {
 	`
 
 	if _, err := db.Exec(schema); err != nil {
+		log.Printf("[execlog] Base schema creation failed: %v", err)
 		return err
 	}
 
@@ -88,6 +109,7 @@ func createSchema(db *sql.DB) error {
 		_, err := db.Exec(migration)
 		// Ignore "duplicate column" error for existing DBs
 		if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			log.Printf("[execlog] Migration failed: %s - %v", migration, err)
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
