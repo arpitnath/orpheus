@@ -292,12 +292,6 @@ Use the automated setup script:
 ./scripts/orchestrators/setup-local.sh
 ```
 
-Or with options:
-
-```bash
-./scripts/orchestrators/setup-local.sh --skip-ollama  # Skip Ollama setup
-./scripts/orchestrators/setup-local.sh --help         # See all options
-```
 
 **macOS Note:** Orpheus uses [Lima](https://lima-vm.io/) to run Linux containers. The setup script handles this automatically—no manual VM configuration needed.
 
