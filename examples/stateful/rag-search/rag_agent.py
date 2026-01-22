@@ -25,14 +25,13 @@ import time
 from pathlib import Path
 
 # RAG dependencies
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_ollama import OllamaLLM
+from langchain_ollama import OllamaLLM, OllamaEmbeddings
 from langchain_core.prompts import PromptTemplate
 
 # Configuration
 INDEX_DIR = os.getenv("INDEX_DIR", "./data/faiss_index")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 TOP_K = int(os.getenv("TOP_K", "4"))
 
 # Model endpoint - ServiceManager injects MODEL_URL automatically
@@ -70,15 +69,12 @@ class RAGEngine:
         if self._initialized:
             return
 
-        # Load embeddings model
-        print(f"[rag] Loading embedding model: {EMBEDDING_MODEL}")
-        start = time.time()
-        embeddings = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL,
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True},
+        # Load embeddings model (Ollama-based, HTTP request to model server)
+        print(f"[rag] Using Ollama embeddings: {EMBEDDING_MODEL} at {MODEL_URL}")
+        embeddings = OllamaEmbeddings(
+            base_url=MODEL_URL,
+            model=EMBEDDING_MODEL,
         )
-        self._timings["embeddings_load"] = time.time() - start
 
         # Load FAISS index
         index_path = Path(INDEX_DIR)
@@ -106,7 +102,7 @@ class RAGEngine:
         )
 
         self._initialized = True
-        print(f"[rag] RAG engine initialized (embeddings: {self._timings['embeddings_load']:.2f}s, index: {self._timings['index_load']:.2f}s)")
+        print(f"[rag] RAG engine initialized (index load: {self._timings['index_load']:.2f}s)")
 
     def retrieve(self, question: str, top_k: int = None) -> tuple:
         """Retrieve relevant documents for a question."""

@@ -445,3 +445,33 @@ func (m *Manager) Stop(ctx context.Context) error {
 	log.Printf("[service-manager] Stopped")
 	return nil
 }
+
+// GetServerStatus returns the status of all registered model servers (for telemetry).
+// Returns a map of engine name → ServerStatus.
+func (m *Manager) GetServerStatus() map[string]ServerStatus {
+	statuses := make(map[string]ServerStatus)
+
+	// Get backend status if exists
+	if m.backend != nil {
+		status := m.backend.Status()
+		// Use model name as key (e.g., "ollama", "vllm")
+		engineName := "unknown"
+		// Infer engine type from endpoint
+		if status.Endpoint != "" {
+			if status.Endpoint == "http://localhost:11434" || status.Endpoint == "http://127.0.0.1:11434" {
+				engineName = "ollama"
+			} else {
+				engineName = "vllm"
+			}
+		}
+		statuses[engineName] = status
+	}
+
+	// Also include all registered servers
+	for name, server := range m.servers {
+		statuses[name] = server.Status()
+	}
+
+	return statuses
+}
+

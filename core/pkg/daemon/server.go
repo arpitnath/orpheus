@@ -21,6 +21,7 @@ import (
 	"orpheus/daemon/pkg/runtime/downloader"
 	"orpheus/daemon/pkg/scaling"
 	"orpheus/daemon/pkg/service"
+	"orpheus/daemon/pkg/telemetry"
 )
 
 // Server is the orpheus daemon HTTP server.
@@ -47,6 +48,10 @@ type Server struct {
 	// Autoscaling (NEW - integrates pkg/scaling)
 	poolManager *PoolManager
 	autoscaler  *scaling.BasicAutoscaler
+
+	// Telemetry (metrics collection and export)
+	telemetryRegistry *telemetry.DefaultRegistry
+	telemetryExporter *telemetry.PrometheusExporter
 
 	// Running agents (for status/kill endpoints)
 	running map[string]*RunningAgent
@@ -146,6 +151,31 @@ func NewServer(config *DaemonConfig, version string, execlogDir string) (*Server
 	mcpHandler := mcp.NewMCPHandler(mcpManager)
 	mux.Handle("/mcp/", mcpHandler)
 	log.Printf("MCP endpoints enabled at /mcp/")
+
+	// Initialize telemetry system (Prometheus /metrics endpoint)
+	telemetryRegistry := telemetry.NewRegistry(&telemetry.NoOpIsolator{})
+
+	// Register collectors (wrap existing GetStats methods)
+	if err := telemetryRegistry.Register(NewPoolCollector(poolManager)); err != nil {
+		log.Printf("[telemetry] Warning: Failed to register PoolCollector: %v", err)
+	}
+	if err := telemetryRegistry.Register(NewQueueCollector(poolManager)); err != nil {
+		log.Printf("[telemetry] Warning: Failed to register QueueCollector: %v", err)
+	}
+	if err := telemetryRegistry.Register(NewExecLogCollector(reg, execlogDir)); err != nil {
+		log.Printf("[telemetry] Warning: Failed to register ExecLogCollector: %v", err)
+	}
+	if err := telemetryRegistry.Register(NewServiceCollector(serviceManager)); err != nil {
+		log.Printf("[telemetry] Warning: Failed to register ServiceCollector: %v", err)
+	}
+
+	// Create exporter and mount /metrics endpoint
+	telemetryExporter := telemetry.NewPrometheusExporter(telemetryRegistry)
+	mux.Handle("/metrics", telemetryExporter)
+	log.Printf("Telemetry /metrics endpoint enabled (Prometheus format)")
+
+	s.telemetryRegistry = telemetryRegistry
+	s.telemetryExporter = telemetryExporter
 
 	s.httpServer = &http.Server{
 		Handler:      mux,

@@ -186,6 +186,34 @@ func (pm *PoolManager) RemovePool(agentName string) error {
 	return nil
 }
 
+// GetAllPools returns a copy of all agent pools (for telemetry/monitoring).
+// Returns a map of agentName → AgentPool.
+func (pm *PoolManager) GetAllPools() map[string]*AgentPool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	pools := make(map[string]*AgentPool, len(pm.pools))
+	for name, pool := range pm.pools {
+		pools[name] = pool
+	}
+	return pools
+}
+
+// Registry returns the agent registry (for telemetry to list agents).
+func (pm *PoolManager) Registry() registry.Registry {
+	return pm.registry
+}
+
+// GetPoolStats returns worker pool statistics (for telemetry).
+func (ap *AgentPool) GetPoolStats() scaling.PoolStats {
+	return ap.pool.GetStats()
+}
+
+// GetQueueStats returns request queue statistics (for telemetry).
+func (ap *AgentPool) GetQueueStats() scaling.QueueStats {
+	return ap.queue.GetStats()
+}
+
 // workerLoop processes requests from an agent pool's queue.
 // This loop runs in the background for each agent.
 func (pm *PoolManager) workerLoop(agentPool *AgentPool) {

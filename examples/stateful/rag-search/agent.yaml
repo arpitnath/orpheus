@@ -7,12 +7,14 @@ memory: 1024
 timeout: 600  # 10 min - LLM inference can be slow
 
 # Model specification - ServiceManager handles model server lifecycle
-model: tinyllama
-engine: ollama  # Using Ollama for CPU testing (no rate limits)
+model: mistral
+engine: ollama  # Using Ollama for local inference (macOS-friendly)
 
 # Environment variables
 env:
   - INDEX_DIR=/agent/data/faiss_index
+  - EMBEDDING_MODEL=nomic-embed-text
+  - OLLAMA_MODEL=mistral
 
 # Scaling configuration
 scaling:
