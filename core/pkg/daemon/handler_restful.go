@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"orpheus/daemon/pkg/config"
 	"orpheus/daemon/pkg/execlog"
 	"orpheus/daemon/pkg/proxy"
 	"orpheus/daemon/pkg/registry"
@@ -19,6 +20,7 @@ import (
 	"orpheus/daemon/pkg/scaling"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 )
 
 // handleAgentResource routes RESTful agent requests based on path.
@@ -644,15 +646,121 @@ func (s *Server) handleGetAgentByName(w http.ResponseWriter, agentName string) {
 		return
 	}
 
-	// Return agent details (without exposing full env var values)
+	// Build response with basic registry data
 	response := map[string]interface{}{
 		"name":       agent.Name,
+		"runtime":    agent.Runtime,
 		"created_at": agent.CreatedAt,
 		"updated_at": agent.UpdatedAt,
 		"env_vars":   extractEnvKeys(agent.ResolvedEnv), // Just keys, not values
 	}
 
+	// Load full agent config from agent.yaml to get additional fields
+	agentCfg, cfgErr := config.Load(agent.Path)
+	if cfgErr == nil {
+		// Add fields from agent.yaml
+		response["module"] = agentCfg.Module
+		response["entrypoint"] = agentCfg.Entrypoint
+
+		// Memory and timeout
+		if agentCfg.Memory > 0 {
+			response["memory"] = agentCfg.Memory
+		}
+		if agentCfg.TimeoutSec > 0 {
+			response["timeout"] = agentCfg.TimeoutSec
+		}
+
+		// Model/Engine (ServiceManager integration)
+		if agentCfg.Model != "" {
+			response["model"] = agentCfg.Model
+		}
+		if agentCfg.Engine != "" {
+			response["engine"] = agentCfg.Engine
+		}
+
+		// Session config
+		if agentCfg.Session.Enabled {
+			response["session"] = map[string]interface{}{
+				"enabled":      agentCfg.Session.Enabled,
+				"key":          agentCfg.Session.Key,
+				"ttl":          agentCfg.Session.TTL.String(),
+				"wait_timeout": agentCfg.Session.WaitTimeout.String(),
+			}
+		}
+
+		// Telemetry config (custom labels)
+		if len(agentCfg.Telemetry.Labels) > 0 {
+			response["telemetry"] = map[string]interface{}{
+				"enabled": agentCfg.Telemetry.IsEnabled(),
+				"labels":  agentCfg.Telemetry.Labels,
+			}
+		}
+	}
+
+	// Load scaling config separately (same pattern as pool_manager)
+	scalingCfg := s.loadAgentScalingConfig(agent.Path)
+	if scalingCfg != nil {
+		response["scaling"] = scalingCfg
+	}
+
 	writeJSON(w, http.StatusOK, response)
+}
+
+// loadAgentScalingConfig loads scaling configuration from agent.yaml.
+func (s *Server) loadAgentScalingConfig(agentPath string) map[string]interface{} {
+	agentYAML := filepath.Join(agentPath, "agent.yaml")
+	data, err := os.ReadFile(agentYAML)
+	if err != nil {
+		return nil
+	}
+
+	var cfg struct {
+		Scaling struct {
+			MinWorkers         int     `yaml:"min_workers"`
+			MaxWorkers         int     `yaml:"max_workers"`
+			TargetUtilization  float64 `yaml:"target_utilization"`
+			ScaleUpThreshold   float64 `yaml:"scale_up_threshold"`
+			ScaleDownThreshold float64 `yaml:"scale_down_threshold"`
+			ScaleUpDelay       string  `yaml:"scale_up_delay"`
+			ScaleDownDelay     string  `yaml:"scale_down_delay"`
+			QueueSize          int     `yaml:"queue_size"`
+		} `yaml:"scaling"`
+	}
+
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+
+	// Only return if scaling was explicitly configured
+	if cfg.Scaling.MinWorkers == 0 && cfg.Scaling.MaxWorkers == 0 {
+		return nil
+	}
+
+	result := map[string]interface{}{
+		"min_workers": cfg.Scaling.MinWorkers,
+		"max_workers": cfg.Scaling.MaxWorkers,
+	}
+
+	if cfg.Scaling.TargetUtilization > 0 {
+		result["target_utilization"] = cfg.Scaling.TargetUtilization
+	}
+	if cfg.Scaling.ScaleUpThreshold > 0 {
+		result["scale_up_threshold"] = cfg.Scaling.ScaleUpThreshold
+	}
+	if cfg.Scaling.ScaleDownThreshold > 0 {
+		result["scale_down_threshold"] = cfg.Scaling.ScaleDownThreshold
+	}
+	if cfg.Scaling.ScaleUpDelay != "" {
+		result["scale_up_delay"] = cfg.Scaling.ScaleUpDelay
+	}
+	if cfg.Scaling.ScaleDownDelay != "" {
+		result["scale_down_delay"] = cfg.Scaling.ScaleDownDelay
+	}
+	if cfg.Scaling.QueueSize > 0 {
+		result["queue_size"] = cfg.Scaling.QueueSize
+	}
+
+	return result
 }
 
 // handleDeleteAgentByName unregisters an agent and removes its files.
