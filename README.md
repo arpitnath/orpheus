@@ -1,16 +1,12 @@
-# Orpheus
 
-**A cognitive runtime for long-lived AI agents**
+<p align="center">
+  <img src="./.github/logo.png" alt="orpheus.run" width="100%" />
+</p>
 
 [![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8.svg)](https://go.dev/)
 [![TypeScript](https://img.shields.io/badge/typescript-5.0+-3178C6.svg)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
----
-
-<p align="center">
-  <img src="./.github/logo.png" alt="orpheus.run" width="100%" />
-</p>
 
 Orpheus is infrastructure for AI agents that need to maintain state, run for extended periods, and scale dynamically. It uses queue-depth autoscaling and lightweight runc containers to handle agent workloads that traditional serverless platforms can't support.
 
@@ -41,7 +37,7 @@ Built for agents that call LLMs, orchestrate multi-step workflows, and maintain 
 One command sets up everything:
 
 ```bash
-git clone https://github.com/orpheus-runtime/orpheus.git
+git clone https://github.com/orpheus-systems/orpheus
 cd orpheus
 ./scripts/orchestrators/setup-local.sh
 ```
@@ -349,7 +345,7 @@ examples/
 ### Build from Source
 
 ```bash
-git clone https://github.com/orpheus-runtime/orpheus.git
+git clone https://github.com/orpheus-systems/orpheus
 cd orpheus
 make build
 ```
