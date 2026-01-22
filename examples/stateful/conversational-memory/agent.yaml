@@ -12,7 +12,7 @@ engine: vllm  # vLLM for GPU inference
 
 env:
   - WORKSPACE_DIR=/workspace
-  - MODEL_URL=http://172.31.14.168:8000
+  - MODEL_URL=${MODEL_URL:-http://localhost:8000}  # vLLM server endpoint
 
 # Telemetry configuration - custom labels for Prometheus filtering
 telemetry:

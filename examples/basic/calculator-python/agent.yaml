@@ -7,7 +7,7 @@ timeout: 180
 
 # Environment variables
 env:
-    - OPENAI_API_KEY=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
+    - OPENAI_API_KEY=${OPENAI_API_KEY}  # Set in your environment
 
 # Telemetry configuration - custom labels for Prometheus filtering
 telemetry:

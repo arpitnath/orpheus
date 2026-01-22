@@ -9,8 +9,8 @@ timeout: 600  # 10 minutes - critical for long workflow
 
 # Environment variables
 env:
-  - OPENAI_API_KEY=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
-  - ANTHROPIC_API_KEY=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
+  - OPENAI_API_KEY=${OPENAI_API_KEY}      # Set in your environment
+  - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # Set in your environment
 
 # Scaling configuration
 scaling:

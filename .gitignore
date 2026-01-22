@@ -69,3 +69,4 @@ claude_ref_dev_docs/
 # Claude Capsule Kit (generated at runtime)
 .claude/**
 CLAUDE.md
+orpheus.yaml
