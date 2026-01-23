@@ -41,7 +41,9 @@
         "guides/stateful-sessions",
         "guides/workspace-persistence",
         "guides/long-running-tasks",
-        "guides/scaling"
+        "guides/scaling",
+        "guides/observability",
+        "guides/model-servers"
       ]
     },
     {
@@ -50,7 +52,8 @@
         "concepts/workers",
         "concepts/autoscaling",
         "concepts/sessions",
-        "concepts/crash-recovery"
+        "concepts/crash-recovery",
+        "concepts/mcp"
       ]
     },
     {
@@ -67,8 +70,13 @@
     {
       "group": "Examples",
       "pages": [
-        "examples/calculator",
-        "examples/rag-search"
+        "examples/basic/agent-router",
+        "examples/basic/calculator-nodejs",
+        "examples/basic/calculator-python",
+        "examples/long running/competitive-analysis",
+        "examples/memory intensive/embedding-cache",
+        "examples/stateful/conversational-memory",
+        "examples/stateful/rag-search"
       ]
     },
     {

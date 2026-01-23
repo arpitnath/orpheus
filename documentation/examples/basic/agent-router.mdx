@@ -1,0 +1,195 @@
+---
+title: 'Agent Router (MCP)'
+description: 'Demonstrates agent-to-agent communication via MCP. Routes math questions to the Calculator agent.'
+---
+
+# Agent Router (MCP Client)
+
+This agent demonstrates **Agent Orchestration** using the **Model Context Protocol (MCP)**. It acts as a router that receives natural language queries and delegates the actual work to other specialized agents.
+
+## How it Works
+
+1.  **The Brain:** Uses Anthropic's Claude (via SDK) to understand user intent.
+2.  **The Tools:** It connects to the `calculator-python` agent via its auto-generated MCP endpoint.
+3.  **The Flow:**
+    *   User asks: "Calculate 25 * 4"
+    *   Router Agent sees it has a `calculator` tool.
+    *   Router Agent calls `calculator-python` via MCP (`tools/call`).
+    *   Calculator returns `100`.
+    *   Router Agent responds: "The result is 100."
+
+## Configuration
+
+Requires an `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` and the URL of the target agent.
+
+```yaml
+env:
+  - ANTHROPIC_API_KEY=sk-...
+  - MCP_URL=https://your-ngrok-url/mcp/agents/calculator-python
+```
+
+<Note>
+For local development, you must use **ngrok** to expose the target agent's MCP endpoint so the LLM provider can reach it.
+</Note>
+
+
+## Source Code
+
+<Tabs>
+  <Tab title="agent.yaml">
+```yaml
+name: agent-router
+runtime: nodejs20
+module: agent.js
+entrypoint: handler
+
+# Memory configuration
+memory: 256
+timeout: 120
+
+# Environment variables (hardcoded for now - secret management not yet implemented)
+env:
+  - ANTHROPIC_API_KEY=sk-proj-**********************
+  - MCP_URL=https://0d768ec007d8.ngrok-free.app/mcp/agents/calculator-python
+
+# Telemetry configuration
+telemetry:
+  enabled: true
+  labels:
+    team: platform
+    tier: integration
+    use_case: agent_router
+
+# Scaling configuration
+scaling:
+  min_workers: 1
+  max_workers: 5
+  target_utilization: 1.5
+  scale_up_threshold: 2.0
+  scale_down_threshold: 0.3
+  scale_up_delay: "10s"
+  scale_down_delay: "30s"
+  queue_size: 20
+
+```
+  </Tab>
+  <Tab title="agent.js">
+```javascript
+/**
+ * Agent Router
+ *
+ * An Orpheus agent that uses Claude (via Anthropic SDK) to route requests
+ * to other Orpheus agents via MCP protocol. This demonstrates:
+ * 1. Agent-to-agent communication via MCP
+ * 2. Anthropic SDK MCP connector integration
+ * 3. Orchestration patterns with Orpheus
+ */
+
+import Anthropic from "@anthropic-ai/sdk";
+
+// Environment variables (set in agent.yaml)
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const MCP_URL = process.env.MCP_URL;
+
+/**
+ * Orpheus handler for MCP client agent.
+ *
+ * @param {Object} inputData - Input with 'query' field
+ * @returns {Object} Response with result or error
+ */
+export async function handler(inputData) {
+  const query = inputData.query || inputData.input || "";
+
+  if (!query) {
+    return {
+      error: "No query provided",
+      usage: "Provide a 'query' field with your request",
+      agent: "agent-router",
+    };
+  }
+
+  if (!ANTHROPIC_API_KEY) {
+    return {
+      error: "ANTHROPIC_API_KEY not configured",
+      agent: "agent-router",
+    };
+  }
+
+  if (!MCP_URL) {
+    return {
+      error: "MCP_URL not configured",
+      agent: "agent-router",
+    };
+  }
+
+  try {
+    // Initialize Anthropic client with MCP beta header
+    const client = new Anthropic({
+      apiKey: ANTHROPIC_API_KEY,
+      defaultHeaders: {
+        "anthropic-beta": "mcp-client-2025-11-20",
+      },
+    });
+
+    // Call Claude with MCP connection to the target agent
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      mcp_servers: [
+        {
+          type: "url",
+          url: MCP_URL,
+          name: "orpheus-target-agent",
+        },
+      ],
+      tools: [
+        {
+          type: "mcp_toolset",
+          mcp_server_name: "orpheus-target-agent",
+        },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: query,
+        },
+      ],
+    });
+
+    // Extract text response
+    let textResponse = "";
+    const toolCalls = [];
+
+    for (const block of response.content) {
+      if (block.type === "text") {
+        textResponse += block.text;
+      } else if (block.type === "tool_use" || block.type === "mcp_tool_use") {
+        toolCalls.push({
+          tool: block.name,
+          input: block.input,
+          server_name: block.server_name || null,
+          type: block.type,
+        });
+      }
+    }
+
+    return {
+      response: textResponse,
+      tool_calls: toolCalls,
+      stop_reason: response.stop_reason,
+      status: "success",
+      agent: "agent-router",
+      mcp_target: MCP_URL,
+    };
+  } catch (error) {
+    return {
+      error: error.message,
+      status: "error",
+      agent: "agent-router",
+    };
+  }
+}
+
+```
+  </Tab>
+</Tabs>

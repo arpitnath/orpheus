@@ -1,0 +1,251 @@
+---
+title: 'Python Calculator'
+description: 'A simple stateful calculator that demonstrates basic math operations and workspace persistence.'
+---
+
+# Calculator Agent
+
+A mathematical calculator agent with various calculation tools using the OpenAI API.
+
+## Features
+
+The calculator agent provides 8 specialized mathematical tools:
+
+### Basic Arithmetic
+- **add_numbers** - Addition of two numbers
+- **subtract_numbers** - Subtraction
+- **multiply_numbers** - Multiplication
+- **divide_numbers** - Division (with zero-check)
+
+### Financial Calculations
+- **calculate_compound_interest** - Compound interest calculator with customizable compounding periods
+
+### Geometric Calculations
+- **calculate_circle_area** - Circle area from radius
+- **calculate_triangle_area** - Triangle area from base and height
+
+### Unit Conversions
+- **convert_temperature** - Temperature conversion between Celsius, Fahrenheit, and Kelvin
+
+## Setup
+
+### 1. Install Dependencies
+
+```bash
+cd examples/calculator-agent
+chmod +x setup.sh
+./setup.sh
+```
+
+This installs:
+- `openai-agents` - OpenAI Agents SDK with all dependencies
+
+### 2. Set OpenAI API Key
+
+```bash
+export OPENAI_API_KEY='your-api-key-here'
+```
+
+Get your API key from: https://platform.openai.com/api-keys
+
+### 3. Deploy with Orpheus
+
+```bash
+cd examples/calculator-python
+orpheus deploy .
+```
+
+## Usage
+
+### Example Queries
+
+Try these calculation requests:
+
+```bash
+# Basic arithmetic
+"Calculate 15 + 27"
+"What's 144 divided by 12?"
+"Multiply 7 and 8"
+
+# Financial calculations
+"What is the compound interest on $5000 at 3.5% for 8 years?"
+"Calculate compound interest on $10000 at 5% annual rate for 10 years with quarterly compounding"
+
+# Geometric calculations
+"Find the area of a circle with radius 12"
+"Calculate the area of a triangle with base 8 and height 6"
+
+# Temperature conversions
+"Convert 100 degrees Fahrenheit to Celsius"
+"What is 0 Celsius in Kelvin?"
+"Convert 98.6 F to C"
+```
+
+### Testing with Orpheus
+
+Once deployed, invoke the agent:
+
+```bash
+orpheus invoke calculator-python '{"query": "What is the compound interest on $5000 at 3.5% for 8 years?"}'
+```
+
+## Configuration
+
+Agent settings from `agent.yaml`:
+
+| Setting | Value | Description |
+|---------|-------|-------------|
+| **runtime** | python3 | Python runtime |
+| **module** | calculator | calculator.py filename |
+| **entrypoint** | handler | Handler function name |
+| **memory** | 256MB | Memory allocation |
+| **timeout** | 180s | Request timeout |
+
+## Tool Details
+
+### add_numbers(a, b)
+```
+Adds two numbers and returns the result.
+Example: add_numbers(5, 3) → 8
+```
+
+### subtract_numbers(a, b)
+```
+Subtracts b from a.
+Example: subtract_numbers(10, 4) → 6
+```
+
+### multiply_numbers(a, b)
+```
+Multiplies two numbers.
+Example: multiply_numbers(6, 7) → 42
+```
+
+### divide_numbers(a, b)
+```
+Divides a by b with zero-check.
+Example: divide_numbers(100, 4) → 25
+Returns error if b = 0
+```
+
+### calculate_compound_interest(principal, rate, time, compounds_per_year=1)
+```
+Calculates compound interest using A = P(1 + r/n)^(nt)
+- principal: Initial amount ($)
+- rate: Annual interest rate (% or decimal)
+- time: Time period (years)
+- compounds_per_year: Compounding frequency (default: 1 = annually)
+
+Example: calculate_compound_interest(5000, 3.5, 8, 1)
+Returns: "Principal: $5,000.00, Final Amount: $6,539.95, Interest Earned: $1,539.95"
+```
+
+### calculate_circle_area(radius)
+```
+Calculates area of a circle: A = πr²
+Example: calculate_circle_area(10)
+Returns: "Circle with radius 10 has area 314.16 square units"
+```
+
+### calculate_triangle_area(base, height)
+```
+Calculates area of a triangle: A = ½ × base × height
+Example: calculate_triangle_area(10, 5)
+Returns: "Triangle with base 10 and height 5 has area 25.00 square units"
+```
+
+### convert_temperature(temperature, from_unit, to_unit)
+```
+Converts temperature between units.
+Supported units: Celsius (C), Fahrenheit (F), Kelvin (K)
+
+Examples:
+- convert_temperature(100, "F", "C") → "100° Fahrenheit = 37.78°C"
+- convert_temperature(0, "C", "K") → "0° Celsius = 273.15K"
+```
+
+## Error Handling
+
+The agent handles errors gracefully:
+
+- **Missing query**: Returns error with usage instructions
+- **Division by zero**: Tool returns error message
+- **Invalid values**: Tools validate inputs (negative radius, etc.)
+- **API failures**: Handler catches exceptions and returns error dict
+
+## File Structure
+
+```
+calculator-python/
+├── calculator.py    # Agent implementation with handler
+├── agent.yaml       # Orpheus configuration
+├── requirements.txt # Python dependencies
+└── README.md        # This file
+```
+
+## Troubleshooting
+
+### Agent fails with "OPENAI_API_KEY not found"
+Set the environment variable before starting the server:
+```bash
+export OPENAI_API_KEY='sk-...'
+```
+
+### Timeout errors
+Increase timeout in `agent.yaml` if calculations take longer than 60s:
+```yaml
+timeout: 120  # 2 minutes
+```
+
+### Import errors
+Run setup.sh to install dependencies:
+```bash
+cd examples/calculator-agent
+./setup.sh
+```
+
+## Next Steps
+
+1. Deploy the agent: `orpheus deploy .`
+2. Test with example queries above
+3. Try more complex calculations and tool combinations
+
+
+## Source Code
+
+<Tabs>
+  <Tab title="agent.yaml">
+```yaml
+name: calculator-python
+runtime: python3
+module: calculator
+entrypoint: handler
+memory: 256
+timeout: 180
+
+# Environment variables
+env:
+    - OPENAI_API_KEY=sk-proj-**********************
+
+# Telemetry configuration - custom labels for Prometheus filtering
+telemetry:
+  enabled: true
+  labels:
+    team: platform
+    tier: basic
+    use_case: math
+
+# Scaling configuration
+scaling:
+    min_workers: 1
+    max_workers: 50
+    target_utilization: 1.5
+    scale_up_threshold: 2.0
+    scale_down_threshold: 0.3
+    scale_up_delay: "10s"
+    scale_down_delay: "30s"
+    queue_size: 200
+
+```
+  </Tab>
+</Tabs>

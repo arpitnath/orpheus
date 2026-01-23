@@ -1,0 +1,10 @@
+{
+  "id": "competitive-analysis",
+  "title": "Competitive Analysis Agent",
+  "description": "A long-running agent that crawls multiple competitor sites and generates a comparison report.",
+  "author": "Orpheus Team",
+  "tags": ["python", "long-running", "scraping"],
+  "runtime": "python3",
+  "version": "1.0.0",
+  "category": "Long Running"
+}

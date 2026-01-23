@@ -1,0 +1,10 @@
+{
+  "id": "calculator-python",
+  "title": "Python Calculator",
+  "description": "A simple stateful calculator that demonstrates basic math operations and workspace persistence.",
+  "author": "Orpheus Team",
+  "tags": ["python", "math", "beginner"],
+  "runtime": "python3",
+  "version": "1.0.0",
+  "category": "Basic"
+}

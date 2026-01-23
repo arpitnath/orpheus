@@ -1,101 +1,28 @@
-# RAG Agent
+# RAG Search Agent
 
-A Retrieval-Augmented Generation agent demonstrating queue-depth based autoscaling for LLM workloads.
+This agent implements a **Retrieval Augmented Generation (RAG)** pipeline. It demonstrates how to manage persistent vector indexes and cache search results using the Workspace.
 
-## What This Demonstrates
+## How it Works
 
-**Queue-depth autoscaling for LLM workloads:**
-- LLM inference is I/O-bound (waiting on network)
-- Scales based on actual user demand (queue depth)
-- More jobs waiting = more workers needed
-- Efficient resource utilization for I/O-bound tasks
+1.  **Ingestion:** You can send documents to be "indexed".
+2.  **Persistence:** The agent saves the document embeddings (simulated) into a vector store located in `/workspace/index/`.
+3.  **Search:** When you ask a query, it:
+    *   Checks the result cache in `/workspace/cache/`.
+    *   If miss, scans the persistent index.
+    *   Returns the most relevant document.
 
-## Architecture
+## Key Features
 
-```
-Question → FAISS Retrieval (~30ms) → Ollama/Mistral (~4-5s) → Answer
-                 ↓                           ↓
-            CPU: negligible            CPU: negligible
-                    (Both are I/O-bound, not CPU-bound)
-```
-
-## Setup
-
-### 1. Prerequisites
-
-**Ollama with Mistral:**
-```bash
-# Install Ollama (https://ollama.ai)
-ollama pull mistral
-ollama serve  # Keep running
-```
-
-### 2. Install Dependencies
-
-```bash
-cd examples/rag-agent
-./setup.sh
-```
-
-### 3. Prepare FAISS Index
-
-Option A: Copy from blog experiment
-```bash
-cp -r /path/to/rag-queue-autoscale/data/faiss_index ./data/
-```
-
-Option B: Create sample index (see indexer below)
-
-### 4. Deploy to Orpheus
-
-```bash
-orpheus deploy ./examples/rag-agent
-```
+*   **Persistent Index:** The vector database lives in `/workspace`, surviving redeploys.
+*   **Result Caching:** Expensive search operations are cached to disk to save compute.
+*   **Stateful updates:** You can incrementally add documents to the index over time.
 
 ## Usage
 
 ```bash
-# Ask a question
-orpheus invoke rag-agent '{"question": "What is machine learning?"}'
+# Add a document
+orpheus run rag-search '{"action": "index", "doc": "Orpheus uses warm workers."}'
 
-# Response includes timing breakdown
-{
-  "status": "success",
-  "answer": "Machine learning is...",
-  "timing": {
-    "retrieval_ms": 28,
-    "llm_ms": 4200,
-    "total_ms": 4228
-  }
-}
+# Search
+orpheus run rag-search '{"action": "search", "query": "warm workers"}'
 ```
-
-## Scaling Configuration
-
-From `agent.yaml`:
-
-```yaml
-scaling:
-  min_workers: 1
-  max_workers: 5
-  target_utilization: 1.5
-  scale_up_threshold: 2.0   # Scale up when queue > 2x workers
-  scale_down_threshold: 0.3 # Scale down when queue < 0.3x workers
-```
-
-This means:
-- 5 jobs queued with 1 worker → scale to 2 workers
-- 10 jobs queued with 2 workers → scale to 4 workers
-- Queue empty for 60s → scale down
-
-## Timing Breakdown
-
-Typical response times:
-
-| Stage | Time | CPU Usage |
-|-------|------|-----------|
-| FAISS retrieval | ~30ms | negligible |
-| LLM inference | ~4-5s | negligible |
-| **Total** | **~4-5s** | **~3m** |
-
-**99% of time is LLM inference (I/O wait). Queue-depth autoscaling provides efficient scaling.**

@@ -1,0 +1,186 @@
+---
+title: 'Model Servers'
+description: 'Run Ollama and vLLM with automatic lifecycle management'
+---
+
+Orpheus can manage local model servers (Ollama, vLLM) with automatic lifecycle and supervision.
+
+## Overview
+
+When you specify `engine` in agent.yaml, Orpheus:
+1. Starts the model server if not running
+2. Monitors health continuously
+3. Restarts on failures with backoff
+4. Injects `MODEL_URL` environment variable
+
+## Configuration
+
+```yaml
+name: my-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+# Model server configuration
+engine: ollama           # ollama or vllm
+model: mistral           # Model name
+```
+
+---
+
+## Ollama Setup
+
+### macOS (Metal)
+
+```bash
+# Install Ollama
+brew install ollama
+
+# Pull a model
+ollama pull mistral
+
+# Orpheus will start it automatically
+```
+
+### Linux
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull a model
+ollama pull mistral
+```
+
+### Agent Configuration
+
+```yaml
+name: my-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+engine: ollama
+model: mistral
+```
+
+Your agent receives `MODEL_URL` environment variable:
+
+```python
+import os
+import requests
+
+MODEL_URL = os.environ.get("MODEL_URL", "http://localhost:11434")
+
+def handler(input_data):
+    response = requests.post(
+        f"{MODEL_URL}/api/generate",
+        json={"model": "mistral", "prompt": input_data["query"]}
+    )
+    return {"response": response.json()["response"]}
+```
+
+---
+
+## vLLM Setup
+
+<Note>
+vLLM requires Linux + NVIDIA GPU with CUDA.
+</Note>
+
+### Requirements
+
+- Ubuntu 22.04+
+- NVIDIA GPU (8GB+ VRAM)
+- CUDA 12.0+
+- Python 3.10+
+
+### Installation
+
+```bash
+pip install vllm
+```
+
+### Agent Configuration
+
+```yaml
+name: my-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+engine: vllm
+model: mistralai/Mistral-7B-Instruct-v0.2
+```
+
+---
+
+## Supervision Policy
+
+Orpheus supervises model servers with production-grade policies:
+
+### Circuit Breaker
+
+Prevents restart storms:
+- **5 restarts max** per 5 minutes
+- Opens circuit if threshold exceeded
+- Resets after cool-down period
+
+### Exponential Backoff
+
+Delays between restart attempts:
+```
+2s → 4s → 8s → 16s → 32s → 60s (max)
+```
+
+With ±20% jitter to prevent thundering herd.
+
+### OOM Handling
+
+When model server exits with code 137 (OOM):
+- Triggers 60-second minimum backoff
+- Logs warning for memory investigation
+
+---
+
+## Monitoring
+
+Check model server status:
+
+```bash
+# View agent stats (includes service status)
+orpheus stats my-agent
+```
+
+Prometheus metrics available:
+
+```
+orpheus_service_up{agent="my-agent"} 1
+orpheus_service_uptime_seconds{agent="my-agent"} 3600
+```
+
+---
+
+## Troubleshooting
+
+### Model Server Won't Start
+
+**Check logs:**
+```bash
+orpheus logs my-agent
+```
+
+**Common causes:**
+- Model not pulled (`ollama pull mistral`)
+- Port already in use
+- Insufficient VRAM (for vLLM)
+
+### Slow Model Loading
+
+First request may be slow while model loads into memory. Subsequent requests are fast.
+
+**Tip:** Set `min_workers: 1` to keep a worker warm with model loaded.
+
+<Card title="Observability" icon="chart-line" href="/guides/observability">
+  Monitor model server health →
+</Card>
