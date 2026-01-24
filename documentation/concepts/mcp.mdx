@@ -19,13 +19,15 @@ LLMs can discover your agent's capabilities and invoke it as a tool.
 
 ## How It Works
 
-```
-┌─────────────────┐       MCP Protocol       ┌─────────────────┐
-│  Agent A        │  ───────────────────────► │  Agent B        │
-│  (or Claude)    │                           │  (your agent)   │
-│                 │  ◄─────────────────────── │                 │
-└─────────────────┘                           └─────────────────┘
-```
+
+<img
+  className="block"
+  src="/assets/mcp_working.svg"
+  alt="workers"
+/>
+
+
+
 
 **Protocol flow:**
 1. `initialize` — Establish session

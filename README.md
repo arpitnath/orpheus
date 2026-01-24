@@ -10,7 +10,16 @@
 
 Orpheus is infrastructure for AI agents that need to maintain state, run for extended periods, and scale dynamically. It uses queue-depth autoscaling and lightweight runc containers to handle agent workloads that traditional serverless platforms can't support.
 
-Built for agents that call LLMs, orchestrate multi-step workflows, and maintain context across invocations—Orpheus provides the execution layer with persistent workspaces, built-in streaming, and production-grade supervision.
+Built for agents that call LLMs, orchestrate multi-step workflows, and maintain context across invocations, Orpheus provides the execution layer with persistent workspaces, built-in streaming, and production-grade supervision.
+
+
+---
+
+<p align="center">
+  <img src="./.github/architecture.svg" alt="Claude Capsule Kit" width="100%" />
+</p>
+
+
 
 **Key capabilities:**
 
@@ -22,6 +31,10 @@ Built for agents that call LLMs, orchestrate multi-step workflows, and maintain 
 - **vLLM/Ollama integration** with automatic lifecycle management
 - **Production supervision** with circuit breakers, backoff, and OOM handling
 - **Prometheus metrics** — Built-in `/metrics` for queue depth, workers, and executions
+
+<p align="center">
+  <img src="./.github/feature.svg" alt="Claude Capsule Kit" width="100%" />
+</p>
 
 
 <p align="center">
@@ -77,6 +90,10 @@ cd /path/to/orpheus && sudo ./bin/orpheusd --tcp-bind 0.0.0.0:7777
 ```
 
 ### Deploy Your First Agent
+
+<p align="center">
+  <img src="./.github/cli-deploy.svg" alt="Claude Capsule Kit" width="100%" />
+</p>
 
 Create two files in a directory:
 
@@ -216,17 +233,7 @@ curl http://localhost:7777/metrics | grep orpheus_queue_depth
 # orpheus_queue_depth{agent="my-agent"} 12
 ```
 
----
 
-## Architecture
-
-<p align="center">
-  <img src="./.github/architecture.png" alt="Claude Capsule Kit" width="100%" />
-</p>
-
-
-
----
 
 ## CLI Reference
 
