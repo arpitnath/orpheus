@@ -2,10 +2,10 @@
   "$schema": "https://mintlify.com/schema.json",
   "name": "Orpheus",
   "logo": {
-    "dark": "/assets/logo_dark.svg",
-    "light": "/assets/logo.svg"
+    "dark": "/assets/logo_dark.png",
+    "light": "/assets/logo.png"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "/favicon.ico",
   "colors": {
     "primary": "#269880",
     "light": "#19E9BE",
