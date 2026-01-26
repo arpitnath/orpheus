@@ -1,0 +1,10 @@
+{
+  "id": "calculator-nodejs",
+  "title": "Node.js Calculator",
+  "description": "A simple calculator agent running on Node.js runtime.",
+  "author": "Orpheus Team",
+  "tags": ["nodejs", "math", "beginner"],
+  "runtime": "nodejs20",
+  "version": "1.0.0",
+  "category": "Basic"
+}

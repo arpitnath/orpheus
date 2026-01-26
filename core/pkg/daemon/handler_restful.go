@@ -168,11 +168,13 @@ func (s *Server) executeViaPool(w http.ResponseWriter, r *http.Request, agentNam
 		}
 		// Don't close - writer is cached and reused
 
+		
 		err = writer.Log(&execlog.Event{
 			Timestamp: time.Now(),
 			RequestID: scalingReq.ID,
 			State:     execlog.StateQueued,
 			SessionID: ptrOrNil(scalingReq.SessionID),
+			Source:    ptrString(execlog.SourceHTTP),
 		})
 		if err != nil {
 			log.Printf("Warning: Failed to log QUEUED: %v", err)
@@ -241,6 +243,7 @@ func (s *Server) executeDirectly(w http.ResponseWriter, r *http.Request, agent *
 			State:      state,
 			DurationMs: durationMs,
 			Error:      errMsg,
+			Source:     ptrString(execlog.SourceHTTP),
 		}
 		if err := writer.Log(event); err != nil {
 			log.Printf("Warning: Failed to log %s: %v", state, err)
@@ -376,11 +379,13 @@ func (s *Server) executeViaPoolStreaming(w http.ResponseWriter, r *http.Request,
 			log.Printf("Warning: Failed to create execlog writer: %v", err)
 			return
 		}
+		
 		err = writer.Log(&execlog.Event{
 			Timestamp: time.Now(),
 			RequestID: scalingReq.ID,
 			State:     execlog.StateQueued,
 			SessionID: ptrOrNil(scalingReq.SessionID),
+			Source:    ptrString(execlog.SourceHTTP),
 		})
 		if err != nil {
 			log.Printf("Warning: Failed to log QUEUED: %v", err)
@@ -475,6 +480,7 @@ func (s *Server) handleRunByNameStreaming(w http.ResponseWriter, r *http.Request
 			State:      state,
 			DurationMs: durationMs,
 			Error:      errMsg,
+			Source:     ptrString(execlog.SourceHTTP),
 		}
 		if err := writer.Log(event); err != nil {
 			log.Printf("Warning: Failed to log %s: %v", state, err)
@@ -1334,6 +1340,7 @@ func (s *Server) handleExecLog(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
 	sessionFilter := r.URL.Query().Get("session")
 	workerFilter := r.URL.Query().Get("worker")
+	sourceFilter := r.URL.Query().Get("source") // Filter by "http" or "mcp"
 
 	// Parse pagination (default limit: 50, max: 1000)
 	limit := 50
@@ -1371,7 +1378,7 @@ func (s *Server) handleExecLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query each agent's execlog
-	var allLogs []map[string]interface{}
+	allLogs := make([]map[string]interface{}, 0)
 	totalCount := 0
 
 	for _, agent := range filteredAgents {
@@ -1385,6 +1392,7 @@ func (s *Server) handleExecLog(w http.ResponseWriter, r *http.Request) {
 			Status:    statusFilter,
 			WorkerID:  workerFilter,
 			SessionID: sessionFilter,
+			Source:    sourceFilter,
 			Limit:     limit,
 			Offset:    offset,
 		}
@@ -1426,6 +1434,12 @@ func (s *Server) handleExecLog(w http.ResponseWriter, r *http.Request) {
 			}
 			if entry.Error != nil {
 				logMap["error"] = *entry.Error
+			}
+			if entry.Source != nil {
+				logMap["source"] = *entry.Source
+			}
+			if entry.MCPCaller != nil {
+				logMap["mcp_caller"] = *entry.MCPCaller
 			}
 
 			allLogs = append(allLogs, logMap)

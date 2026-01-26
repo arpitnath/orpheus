@@ -281,6 +281,7 @@ func (pm *PoolManager) workerLoop(agentPool *AgentPool) {
 			State:     execlog.StateStarted,
 			WorkerID:  ptrString(worker.ID()),
 			SessionID: ptrOrNil(req.SessionID),
+			Source:    ptrString(execlog.SourceHTTP),
 		})
 
 		// Check if streaming requested (Phase 3)
@@ -328,6 +329,7 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
 			Error:      errPtr,
+			Source:     ptrString(execlog.SourceHTTP),
 		})
 	} else {
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
@@ -335,6 +337,7 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 			State:      execlog.StateCompleted,
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
+			Source:     ptrString(execlog.SourceHTTP),
 		})
 	}
 
@@ -378,6 +381,7 @@ func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
 			Error:      errPtr,
+			Source:     ptrString(execlog.SourceHTTP),
 		})
 	} else {
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
@@ -385,6 +389,7 @@ func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.
 			State:      execlog.StateCompleted,
 			WorkerID:   ptrString(worker.ID()),
 			DurationMs: ptrInt64(duration.Milliseconds()),
+			Source:     ptrString(execlog.SourceHTTP),
 		})
 	}
 

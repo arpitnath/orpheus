@@ -1,0 +1,10 @@
+{
+  "id": "embedding-cache",
+  "title": "Embedding Cache Agent",
+  "description": "High-performance agent that keeps an embedding model loaded in memory for fast vector generation.",
+  "author": "Orpheus Team",
+  "tags": ["python", "embeddings", "performance"],
+  "runtime": "python3",
+  "version": "1.0.0",
+  "category": "Memory Intensive"
+}

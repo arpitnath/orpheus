@@ -1,0 +1,11 @@
+{
+  "id": "rag-search",
+  "title": "RAG Search Agent",
+  "description": "Retrieval Augmented Generation agent that persists search indexes and cache.",
+  "author": "Orpheus Team",
+  "tags": ["python", "rag", "search"],
+  "runtime": "python3",
+  "version": "1.0.0",
+  "category": "Stateful",
+  "files": ["rag_agent.py", "indexer.py", "requirements.txt"]
+}

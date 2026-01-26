@@ -1,0 +1,167 @@
+---
+title: 'Observability'
+description: 'Monitor agents with Prometheus metrics and exec logs'
+---
+
+Orpheus provides built-in observability for production monitoring.
+
+## Prometheus Metrics
+
+Every daemon exposes a `/metrics` endpoint:
+
+```bash
+curl http://localhost:7777/metrics
+```
+
+### Available Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `orpheus_queue_depth` | Gauge | Pending requests per agent |
+| `orpheus_queue_pending` | Gauge | Requests waiting in queue |
+| `orpheus_queue_processing` | Gauge | Requests currently executing |
+| `orpheus_queue_max_size` | Gauge | Maximum queue capacity |
+| `orpheus_pool_workers_total` | Gauge | Total workers per agent |
+| `orpheus_pool_workers_idle` | Gauge | Idle workers available |
+| `orpheus_pool_workers_busy` | Gauge | Workers currently executing |
+| `orpheus_pool_desired_size` | Gauge | Target worker count |
+| `orpheus_execlog_requests_total` | Counter | Total requests processed |
+| `orpheus_execlog_success_rate` | Gauge | Success percentage |
+| `orpheus_service_up` | Gauge | Model server status |
+| `orpheus_service_uptime_seconds` | Gauge | Model server uptime |
+
+### Prometheus Scrape Config
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'orpheus'
+    static_configs:
+      - targets: ['localhost:7777']
+    scrape_interval: 15s
+```
+
+### Grafana Queries
+
+```promql
+# Queue depth by agent
+orpheus_queue_depth{agent="my-agent"}
+
+# Worker utilization
+orpheus_pool_workers_busy / orpheus_pool_workers_total
+
+# Request rate
+rate(orpheus_execlog_requests_total[5m])
+```
+
+---
+
+## Execution Logs
+
+Every request is tracked in the exec log with full lifecycle:
+
+```bash
+orpheus execlog list my-agent
+```
+
+**Output:**
+```
+TIMESTAMP   REQUEST ID      AGENT      STATE     SOURCE  DURATION
+────────────────────────────────────────────────────────────────
+21:31:59    67f6b220-10b... my-agent   COMPLETED http    234ms
+21:31:50    67f6b220-10b... my-agent   STARTED   http    -
+21:31:50    67f6b220-10b... my-agent   QUEUED    http    -
+```
+
+### Request States
+
+| State | Meaning |
+|-------|---------|
+| `QUEUED` | Request received, waiting for worker |
+| `STARTED` | Worker picked up the request |
+| `COMPLETED` | Execution finished successfully |
+| `FAILED` | Handler returned an error |
+| `CRASHED` | Daemon died mid-execution |
+
+---
+
+## Source Tracking
+
+Exec logs distinguish between HTTP and MCP requests:
+
+```bash
+# View HTTP requests only
+orpheus execlog list my-agent --source http
+
+# View MCP (agent-to-agent) requests only
+orpheus execlog list my-agent --source mcp
+```
+
+**Visual distinction in CLI:**
+- **http** = Blue text
+- **mcp** = Magenta text
+
+### Debugging Agent Chains
+
+When agent-router calls calculator-python via MCP:
+
+```bash
+# See what agent-router did (HTTP)
+orpheus execlog list agent-router --source http
+
+# See what calculator-python received (MCP)
+orpheus execlog list calculator-python --source mcp
+```
+
+---
+
+## API Endpoints
+
+### Get Metrics
+
+```bash
+curl http://localhost:7777/metrics
+```
+
+### Query Exec Logs
+
+```bash
+# All logs for an agent
+curl "http://localhost:7777/v1/execlog?agent=my-agent"
+
+# Filter by source
+curl "http://localhost:7777/v1/execlog?agent=my-agent&source=mcp"
+
+# Filter by state
+curl "http://localhost:7777/v1/execlog?agent=my-agent&state=FAILED"
+```
+
+---
+
+## Custom Labels
+
+Add labels to metrics via agent.yaml:
+
+```yaml
+name: my-agent
+runtime: python3
+module: agent.py
+entrypoint: handler
+
+telemetry:
+  enabled: true
+  labels:
+    team: platform
+    tier: production
+    use_case: rag
+```
+
+Metrics will include these labels:
+
+```
+orpheus_queue_depth{agent="my-agent",team="platform",tier="production"}
+```
+
+<Card title="Autoscaling" icon="chart-line" href="/concepts/autoscaling">
+  Learn how queue-depth drives scaling →
+</Card>

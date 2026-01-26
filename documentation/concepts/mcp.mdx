@@ -1,0 +1,107 @@
+---
+title: 'MCP Integration'
+description: 'Agent-to-agent communication via Model Context Protocol'
+---
+
+## What is MCP?
+
+MCP (Model Context Protocol) is a standard protocol for LLMs to discover and invoke tools. Every Orpheus agent automatically gets an MCP endpoint.
+
+## Auto-Generated Endpoints
+
+When you deploy an agent, Orpheus creates:
+
+```
+mcp://your-server:7777/agents/{agent-name}
+```
+
+LLMs can discover your agent's capabilities and invoke it as a tool.
+
+## How It Works
+
+
+<img
+  className="block"
+  src="/assets/mcp_working.svg"
+  alt="workers"
+/>
+
+
+
+
+**Protocol flow:**
+1. `initialize` — Establish session
+2. `tools/list` — Discover available tools
+3. `tools/call` — Execute the agent
+
+## Agent-to-Agent Example
+
+One Orpheus agent can call another via MCP:
+
+**agent-router** → calls → **calculator-python**
+
+```javascript
+// agent-router calls calculator-python via MCP
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  mcp_servers: [{
+    type: "url",
+    url: "https://your-host/mcp/agents/calculator-python",
+    name: "calculator"
+  }],
+  tools: [{
+    type: "mcp_toolset",
+    mcp_server_name: "calculator"
+  }],
+  messages: [{ role: "user", content: "Calculate 25 * 4" }]
+});
+```
+
+## Local Development
+
+<Warning>
+For local development, you need ngrok. Anthropic's servers can't reach localhost.
+</Warning>
+
+```bash
+# Start ngrok tunnel
+ngrok http 7777
+
+# Use the public URL
+# https://abc123.ngrok-free.app/mcp/agents/calculator-python
+```
+
+## Test MCP Endpoints
+
+```bash
+# Test initialize
+curl -X POST http://localhost:7777/mcp/agents/my-agent \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
+
+# Test tools/list
+curl -X POST http://localhost:7777/mcp/agents/my-agent \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: {session-id}" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+```
+
+## Tracking MCP Requests
+
+MCP requests are tracked separately in exec logs:
+
+```bash
+# View MCP requests only
+orpheus execlog list my-agent --source mcp
+
+# View HTTP requests only
+orpheus execlog list my-agent --source http
+```
+
+The `source` field shows:
+- **http** — Direct REST API calls
+- **mcp** — Agent-to-agent calls via MCP
+
+<Card title="Observability" icon="chart-line" href="/guides/observability">
+  Monitor MCP and HTTP requests →
+</Card>

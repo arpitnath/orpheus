@@ -11,6 +11,12 @@ const (
 	StateCrashed   = "CRASHED"
 )
 
+// Source constants for request origin tracking
+const (
+	SourceHTTP = "http"
+	SourceMCP  = "mcp"
+)
+
 // Event represents a single state transition in the request lifecycle
 type Event struct {
 	Timestamp  time.Time
@@ -20,6 +26,8 @@ type Event struct {
 	SessionID  *string // Null if no session affinity
 	DurationMs *int64  // Only for COMPLETED/FAILED
 	Error      *string // Only for FAILED
+	Source     *string // Request source: "http" or "mcp"
+	MCPCaller  *string // For MCP requests: name of calling agent
 }
 
 // CrashedRequest represents a request that was executing when daemon crashed
@@ -36,8 +44,9 @@ type ExecLogFilters struct {
 	Status    string
 	WorkerID  string
 	SessionID string
-	StartTime int64 // Unix nano
-	EndTime   int64 // Unix nano
+	Source    string // Filter by source: "http" or "mcp"
+	StartTime int64  // Unix nano
+	EndTime   int64  // Unix nano
 	Limit     int
 	Offset    int
 }
@@ -51,6 +60,8 @@ type ExecLogEntry struct {
 	Timestamp  int64
 	DurationMs *int64
 	Error      *string
+	Source     *string // Request source: "http" or "mcp"
+	MCPCaller  *string // For MCP requests: name of calling agent
 }
 
 // ExecLogStats holds aggregated statistics for an agent's execution logs

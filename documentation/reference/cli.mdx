@@ -3,6 +3,15 @@ title: 'CLI Commands'
 description: 'Complete command reference'
 ---
 
+
+<img
+  className="block"
+  src="/assets/deploy_cmd.gif"
+  alt="workers"
+/>
+
+
+
 ## Deployment
 
 ### deploy
@@ -90,10 +99,12 @@ orpheus runs <name>
 **Options:**
 - `-n <count>` - Number of results
 - `--state <state>` - Filter by state (completed, failed, crashed)
+- `--source <http|mcp>` - Filter by request source
 
 **Example:**
 ```bash
 orpheus runs my-agent -n 10 --state failed
+orpheus runs my-agent --source mcp
 ```
 
 ---

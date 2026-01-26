@@ -227,6 +227,7 @@ export function createClient(_serverName?: string): OrpheusClient {
       if (filters?.status) params.append('status', filters.status);
       if (filters?.session) params.append('session', filters.session);
       if (filters?.worker) params.append('worker', filters.worker);
+      if (filters?.source) params.append('source', filters.source);
       if (filters?.limit) params.append('limit', String(filters.limit));
       if (filters?.offset) params.append('offset', String(filters.offset));
 

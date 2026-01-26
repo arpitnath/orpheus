@@ -1,31 +1,27 @@
 ---
 title: 'Overview'
-description: 'Runtime for long-running AI agents'
+description: 'Cognitive runtime for autonomous AI agents'
 ---
 
-Orpheus is a runtime for AI agents that need to remember things.
+<img
+  className="block"
+  src="/assets/hero.svg"
+  alt="Orpheus Hero"
+/>
 
-It keeps workers warm (no cold starts), persists files across requests, and routes sessions to the same worker. Deploy with `orpheus deploy`, run with `orpheus run`.
+**Orpheus is a specialized cognitive runtime engineered to provide long-term persistence, coordination, and governance for autonomous AI agents.**
 
-## What Orpheus Does
+Unlike traditional serverless functions or container orchestrators, it utilizes a three-layer architecture, coordination through workers, execution via lightweight **runc containers**, and persistence through dedicated workspaces.
 
-| Feature | What It Means |
-|---------|---------------|
-| **Warm workers** | No waiting for containers to start |
-| **Workspace persistence** | Files in `/workspace` survive across requests |
-| **Session affinity** | Same user routes to same worker |
-| **Queue-depth scaling** | Scales when work piles up |
-| **Crash recovery** | Every request tracked, nothing lost |
+The system optimizes for time and continuity rather than just latency, using **queue-depth autoscaling** to manage I/O-bound workloads that typically idle while waiting for LLM responses.
 
-## Quick Example
+Key components like the ServiceManager and Registry enable seamless integration with local inference engines like Ollama and vLLM, providing a platform-agnostic environment for complex reasoning systems.
 
-```bash
-# Deploy an agent
-orpheus deploy ./my-agent
+Recent technical refinements have introduced an actor model to eliminate race conditions and an ExecLog system for crash recovery and auditability.
 
-# Run it (instant - worker already warm)
-orpheus run my-agent '{"query": "hello"}'
-```
+Ultimately, Orpheus bridges the gap between simple script execution and heavyweight cloud orchestration, the essential substrate for industrial-grade LLM applications.
+
+
 
 ## When to Use Orpheus
 

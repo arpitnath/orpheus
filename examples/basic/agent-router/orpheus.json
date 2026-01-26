@@ -1,0 +1,10 @@
+{
+  "id": "agent-router",
+  "title": "Agent Router (MCP)",
+  "description": "Demonstrates agent-to-agent communication via MCP. Routes math questions to the Calculator agent.",
+  "author": "Orpheus Team",
+  "tags": ["nodejs", "mcp", "orchestration"],
+  "runtime": "nodejs20",
+  "version": "1.0.0",
+  "category": "Basic"
+}

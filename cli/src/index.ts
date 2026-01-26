@@ -896,6 +896,7 @@ execlogCommand
   .option('-s, --status <status>', 'Filter by status (QUEUED, STARTED, COMPLETED, FAILED, CRASHED)')
   .option('--session <id>', 'Filter by session ID')
   .option('-w, --worker <id>', 'Filter by worker ID')
+  .option('--source <source>', 'Filter by source (http, mcp)')
   .option('-n, --limit <count>', 'Number of records to show', '50')
   .option('--offset <num>', 'Pagination offset', '0')
   .option('-f, --format <format>', 'Output format (table, json)', 'table')
@@ -903,6 +904,7 @@ execlogCommand
     status?: string;
     session?: string;
     worker?: string;
+    source?: string;
     limit?: string;
     offset?: string;
     format?: string;
@@ -913,6 +915,7 @@ execlogCommand
         status: options.status,
         session: options.session,
         worker: options.worker,
+        source: options.source,
         limit: parseInt(options.limit || '50', 10),
         offset: parseInt(options.offset || '0', 10),
       };
@@ -934,22 +937,25 @@ execlogCommand
       console.log(`\n${c.bold}Execution Logs${c.reset} (Showing ${response.count} of ${response.total})\n`);
 
       // Display table header
-      const cols = ['REQUEST ID', 'AGENT', 'STATE', 'WORKER', 'DURATION'];
-      const widths = [16, 20, 10, 16, 10];
+      const cols = ['TIMESTAMP', 'REQUEST ID', 'AGENT', 'STATE', 'WORKER', 'DURATION', 'SOURCE', 'MCP CALLER'];
+      const widths = [12, 16, 20, 10, 16, 10, 8, 14];
       let header = '';
       for (let i = 0; i < cols.length; i++) {
         header += cols[i].padEnd(widths[i]);
       }
       console.log(c.dim + header + c.reset);
-      console.log(c.dim + '─'.repeat(72) + c.reset);
+      console.log(c.dim + '─'.repeat(116) + c.reset);
 
       // Display rows
       for (const log of response.data) {
+        const timestamp = new Date(log.timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const reqId = log.request_id.substring(0, 12) + '...';
         const agent = log.agent_name.substring(0, 18);
         const state = log.state;
         const worker = log.worker_id ? log.worker_id.substring(0, 14) : '-';
         const duration = log.duration_ms ? `${log.duration_ms}ms` : '-';
+        const source = log.source || '-';
+        const mcpCaller = log.mcp_caller ? log.mcp_caller.substring(0, 12) : '-';
 
         // Color code state
         let stateColored = state;
@@ -959,12 +965,21 @@ execlogCommand
         else if (state === 'QUEUED') stateColored = c.dim + state + c.reset;
         else if (state === 'STARTED') stateColored = c.cyan + state + c.reset;
 
+        // Color code source
+        let sourceColored = source;
+        if (source === 'http') sourceColored = c.blue + source + c.reset;
+        else if (source === 'mcp') sourceColored = c.magenta + source + c.reset;
+        else sourceColored = c.dim + source + c.reset;
+
         console.log(
-          reqId.padEnd(widths[0]) +
-          agent.padEnd(widths[1]) +
-          stateColored.padEnd(widths[2] + (stateColored.length - state.length)) +
-          worker.padEnd(widths[3]) +
-          duration.padEnd(widths[4])
+          timestamp.padEnd(widths[0]) +
+          reqId.padEnd(widths[1]) +
+          agent.padEnd(widths[2]) +
+          stateColored.padEnd(widths[3] + (stateColored.length - state.length)) +
+          worker.padEnd(widths[4]) +
+          duration.padEnd(widths[5]) +
+          sourceColored.padEnd(widths[6] + (sourceColored.length - source.length)) +
+          mcpCaller.padEnd(widths[7])
         );
       }
 

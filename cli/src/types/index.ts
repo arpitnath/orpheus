@@ -205,6 +205,8 @@ export interface ExecLogEntry {
   timestamp: string;
   duration_ms?: number;
   error?: string;
+  source?: string;      // "http" or "mcp"
+  mcp_caller?: string;  // Calling agent name (for MCP requests)
 }
 
 export interface ExecLogFilters {
@@ -212,6 +214,7 @@ export interface ExecLogFilters {
   status?: string;
   session?: string;
   worker?: string;
+  source?: string;  // Filter by "http" or "mcp"
   limit?: number;
   offset?: number;
 }

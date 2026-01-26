@@ -2,23 +2,23 @@
   "$schema": "https://mintlify.com/schema.json",
   "name": "Orpheus",
   "logo": {
-    "dark": "/logo/dark.svg",
-    "light": "/logo/light.svg"
+    "dark": "/assets/logo_dark.svg",
+    "light": "/assets/logo.svg"
   },
   "favicon": "/favicon.svg",
   "colors": {
-    "primary": "#2563eb",
-    "light": "#60a5fa",
-    "dark": "#1e40af",
+    "primary": "#269880",
+    "light": "#19E9BE",
+    "dark": "#269880",
     "anchors": {
-      "from": "#2563eb",
-      "to": "#1e40af"
+      "from": "#269880",
+      "to": "#19E9BE"
     }
   },
   "topbarLinks": [
     {
       "name": "GitHub",
-      "url": "https://github.com/zoops-ai/orpheus"
+      "url": "https://github.com/orpheus-systems/orpheus"
     }
   ],
   "topbarCtaButton": {
@@ -41,7 +41,9 @@
         "guides/stateful-sessions",
         "guides/workspace-persistence",
         "guides/long-running-tasks",
-        "guides/scaling"
+        "guides/scaling",
+        "guides/observability",
+        "guides/model-servers"
       ]
     },
     {
@@ -50,7 +52,8 @@
         "concepts/workers",
         "concepts/autoscaling",
         "concepts/sessions",
-        "concepts/crash-recovery"
+        "concepts/crash-recovery",
+        "concepts/mcp"
       ]
     },
     {
@@ -67,8 +70,13 @@
     {
       "group": "Examples",
       "pages": [
-        "examples/calculator",
-        "examples/rag-search"
+        "examples/basic/agent-router",
+        "examples/basic/calculator-nodejs",
+        "examples/basic/calculator-python",
+        "examples/long running/competitive-analysis",
+        "examples/memory intensive/embedding-cache",
+        "examples/stateful/conversational-memory",
+        "examples/stateful/rag-search"
       ]
     },
     {
@@ -81,6 +89,6 @@
     }
   ],
   "footerSocials": {
-    "github": "https://github.com/zoops-ai/orpheus"
+    "github": "https://github.com/orpheus-systems/orpheus"
   }
 }

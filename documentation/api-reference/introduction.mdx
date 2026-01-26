@@ -28,7 +28,8 @@ http://YOUR_SERVER_IP:7777
 | `POST` | `/v1/agents/{name}/run` | Execute an agent |
 | `GET` | `/v1/agents` | List agents |
 | `GET` | `/v1/agents/{name}/stats` | Get agent stats |
-| `GET` | `/v1/execlog` | Query execution history |
+| `GET` | `/v1/execlog` | Query execution history (`?source=http\|mcp`) |
+| `GET` | `/metrics` | Prometheus metrics |
 | `DELETE` | `/v1/agents/{name}` | Undeploy agent |
 
 ## Response Format

@@ -1,0 +1,10 @@
+{
+  "id": "conversational-memory",
+  "title": "Conversational Memory Agent",
+  "description": "Demonstrates session affinity and workspace persistence for chat history.",
+  "author": "Orpheus Team",
+  "tags": ["python", "chat", "stateful"],
+  "runtime": "python3",
+  "version": "1.0.0",
+  "category": "Stateful"
+}

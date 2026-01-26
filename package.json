@@ -1,0 +1,13 @@
+{
+  "scripts": {
+    "sync-examples": "ts-node --compiler-options '{\"module\":\"commonjs\"}' scripts/sync-docs.ts"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/glob": "^8.1.0",
+    "fs-extra": "^11.3.3",
+    "glob": "^13.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
