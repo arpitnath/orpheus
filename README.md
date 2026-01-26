@@ -7,8 +7,9 @@
 [![TypeScript](https://img.shields.io/badge/typescript-5.0+-3178C6.svg)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
+Orpheus is an Agent Runtime that solves the 'Silent Failure' of CPU autoscaling. It scales on queue depth, persists memory, and recovers from crashes automatically.
 
-Orpheus is infrastructure for AI agents that need to maintain state, run for extended periods, and scale dynamically. It uses queue-depth autoscaling and lightweight runc containers to handle agent workloads that traditional serverless platforms can't support.
+It uses queue-depth autoscaling and lightweight runc containers to handle agent workloads that traditional serverless platforms can't support.
 
 Built for agents that call LLMs, orchestrate multi-step workflows, and maintain context across invocations, Orpheus provides the execution layer with persistent workspaces, built-in streaming, and production-grade supervision.
 
