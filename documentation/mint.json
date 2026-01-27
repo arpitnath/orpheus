@@ -42,6 +42,7 @@
         "guides/workspace-persistence",
         "guides/long-running-tasks",
         "guides/scaling",
+        "guides/capacity-planning",
         "guides/observability",
         "guides/model-servers"
       ]
@@ -53,7 +54,8 @@
         "concepts/autoscaling",
         "concepts/sessions",
         "concepts/crash-recovery",
-        "concepts/mcp"
+        "concepts/mcp",
+        "security"
       ]
     },
     {

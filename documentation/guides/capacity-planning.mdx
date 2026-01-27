@@ -1,0 +1,308 @@
+---
+title: 'Capacity Planning'
+description: 'Size your Orpheus deployment for optimal performance'
+---
+
+## Quick Sizing Calculator
+
+**Step 1: Gather metrics**
+- Expected requests per second (RPS): `_____`
+- Average task duration (seconds): `_____`
+- Peak burst size (concurrent requests): `_____`
+
+**Step 2: Calculate**
+```
+min_workers = ceil(RPS × avg_duration)
+max_workers = ceil(peak_burst × 1.5)
+queue_size = peak_burst × 2
+```
+
+**Step 3: Configure**
+```yaml
+# agent.yaml
+scaling:
+  min_workers: <from step 2>
+  max_workers: <from step 2>
+  queue_size: <from step 2>
+```
+
+---
+
+## Sizing Formulas
+
+### Minimum Workers
+
+**Formula:** `min_workers = ceil(sustained_rps × avg_duration_sec)`
+
+**Purpose:** Keep enough workers warm to handle baseline load without cold starts
+
+**Example:**
+- Sustained RPS: 10 req/s
+- Average duration: 3 seconds
+- Calculation: `ceil(10 × 3) = 30 workers`
+
+<Warning>
+For most use cases, min_workers between 1-5 is sufficient. Pre-warming 30 workers is only needed for very high sustained load.
+</Warning>
+
+---
+
+### Maximum Workers
+
+**Formula:** `max_workers = ceil(peak_rps × avg_duration_sec × 1.5)`
+
+The 1.5 multiplier provides buffer for:
+- Variance in task duration
+- Sudden traffic spikes
+- Worker health issues
+
+**Example:**
+- Peak RPS: 50 req/s (during traffic spike)
+- Average duration: 5 seconds
+- Calculation: `ceil(50 × 5 × 1.5) = 375 workers`
+
+<Note>
+Cap at practical limits (100-200 workers per host). For more capacity, consider multi-host deployment.
+</Note>
+
+---
+
+### Queue Size
+
+**Formula:** `queue_size = peak_concurrent_requests × 2`
+
+The 2x multiplier provides buffer for:
+- Bursts while workers are spawning
+- Requests arriving faster than processing
+- Autoscaler reaction time
+
+**Example:**
+- Peak concurrent requests: 100
+- Calculation: `100 × 2 = 200`
+
+---
+
+## Workload Type Recommendations
+
+### Chatbot / Low Latency
+
+**Characteristics:**
+- Fast responses required (under 2 seconds)
+- Moderate request rate (1-10 req/s)
+- Short task duration (1-3s)
+
+**Recommended config:**
+```yaml
+scaling:
+  min_workers: 2       # Keep warm for instant response
+  max_workers: 10      # Handle bursts
+  queue_size: 20       # Small buffer
+```
+
+---
+
+### RAG / Search Agents
+
+**Characteristics:**
+- Medium latency acceptable (5-10s)
+- Bursty traffic patterns
+- Medium task duration (5-10s)
+
+**Recommended config:**
+```yaml
+scaling:
+  min_workers: 1       # Cost-effective baseline
+  max_workers: 15      # Handle search bursts
+  queue_size: 50       # Buffer for bursts
+```
+
+---
+
+### Batch Processing
+
+**Characteristics:**
+- Latency not critical
+- Sustained load over time
+- Long task duration (30-120s)
+
+**Recommended config:**
+```yaml
+scaling:
+  min_workers: 1       # Minimal cost
+  max_workers: 5       # Limited parallelism
+  queue_size: 100      # Large queue for batch jobs
+```
+
+---
+
+### Demo / Burst Traffic
+
+**Characteristics:**
+- Unpredictable traffic spikes
+- Need to handle 100+ concurrent users
+- Short demo tasks (1-5s)
+
+**Recommended config:**
+```yaml
+scaling:
+  min_workers: 5       # Pre-warmed for burst
+  max_workers: 20      # Handle spike
+  queue_size: 50       # Buffer overflow traffic
+```
+
+---
+
+## Monitoring Your Capacity
+
+### Key Metrics
+
+**Queue Depth:**
+```bash
+curl http://localhost:7777/metrics | grep orpheus_queue_depth
+```
+
+<Warning>
+Alert when: `queue_depth > queue_size × 0.8`
+
+Action: Increase queue_size or max_workers
+</Warning>
+
+**Worker Utilization:**
+```bash
+curl http://localhost:7777/metrics | grep orpheus_pool_workers
+```
+
+Calculate: `utilization = busy_workers / total_workers`
+
+<Warning>
+Alert when: `utilization > 0.9` for >5 minutes
+
+Action: Increase max_workers
+</Warning>
+
+**Timeout Rate:**
+```bash
+curl http://localhost:7777/metrics | grep orpheus_task_timeout
+```
+
+<Warning>
+Alert when: `timeout_rate > 0.01` (1%)
+
+Action: Increase timeout or optimize agent code
+</Warning>
+
+---
+
+## Resource Requirements
+
+### Per-Worker Memory
+
+| Runtime | Overhead | Typical Agent | Total |
+|---------|----------|---------------|-------|
+| Python 3 | 50-100MB | 200-500MB | 250-600MB |
+| Node.js | 30-80MB | 150-400MB | 180-480MB |
+
+**Formula:** `total_memory = num_workers × (overhead + agent_memory)`
+
+**Example:** 10 workers × 600MB = 6GB host memory needed
+
+---
+
+### Per-Worker CPU
+
+Agents are I/O-bound (waiting for LLM APIs), so CPU usage is low:
+- Average: 5-10% CPU per worker
+- Peak: 50% CPU during processing
+
+**Formula:** `num_workers ≈ num_cpu_cores × 10`
+
+**Example:** 8 core machine can handle ~80 workers comfortably
+
+---
+
+## Configurations by Scale
+
+### Small (Under 100 req/day)
+
+```yaml
+scaling:
+  min_workers: 1
+  max_workers: 3
+  queue_size: 10
+```
+
+**Resources:** 1-2 GB RAM, 1-2 CPU cores
+
+---
+
+### Medium (100-10k req/day)
+
+```yaml
+scaling:
+  min_workers: 2
+  max_workers: 10
+  queue_size: 50
+```
+
+**Resources:** 4-8 GB RAM, 2-4 CPU cores
+
+---
+
+### Large (10k-100k req/day)
+
+```yaml
+scaling:
+  min_workers: 5
+  max_workers: 50
+  queue_size: 200
+```
+
+**Resources:** 16-32 GB RAM, 8-16 CPU cores
+
+---
+
+## Common Mistakes
+
+### ❌ Setting min_workers = max_workers
+
+**Why wrong:** Disables autoscaling, wastes resources
+
+**Better:**
+```yaml
+min_workers: 2   # Baseline
+max_workers: 10  # Allow scaling
+```
+
+---
+
+### ❌ Queue size smaller than max_workers
+
+**Why wrong:** Queue fills before workers can scale
+
+**Better:**
+```yaml
+max_workers: 10
+queue_size: 50   # At least 5x max_workers
+```
+
+---
+
+### ❌ Timeout smaller than avg task duration
+
+**Why wrong:** Tasks timeout before completing
+
+**Better:**
+```yaml
+# If avg duration is 45s
+timeout: 90  # 2x average for safety
+```
+
+---
+
+<Card title="Monitor with Prometheus" icon="chart-line" href="/guides/observability">
+  Set up metrics and alerts →
+</Card>
+
+<Card title="Troubleshooting" icon="wrench" href="/troubleshooting/common-issues">
+  Fix common issues →
+</Card>
