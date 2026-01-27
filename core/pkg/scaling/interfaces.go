@@ -58,6 +58,11 @@ type WorkerPool interface {
 	// The pool will scale up or down to match this target.
 	SetDesiredSize(size int)
 
+	// ScaleNow triggers immediate reactive scaling to the target size.
+	// Unlike SetDesiredSize which waits for the maintenance loop, this sends
+	// a signal to trigger scaling immediately (sub-second response).
+	ScaleNow(size int)
+
 	// GetIdleWorker returns an available worker, blocking until one is ready.
 	// Returns an error if the context is cancelled or times out.
 	GetIdleWorker(ctx context.Context) (Worker, error)

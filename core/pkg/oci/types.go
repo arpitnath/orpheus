@@ -43,6 +43,10 @@ type Process struct {
 
 	// Capabilities specifies Linux capabilities (all empty for security)
 	Capabilities *Capabilities `json:"capabilities,omitempty"`
+
+	// NoNewPrivileges prevents the process from gaining additional privileges
+	// Blocks privilege escalation via setuid binaries
+	NoNewPrivileges bool `json:"noNewPrivileges,omitempty"`
 }
 
 // User specifies the user identity for the container process
@@ -106,6 +110,18 @@ type Linux struct {
 
 	// Resources configures resource limits via cgroups
 	Resources *LinuxResources `json:"resources,omitempty"`
+
+	// Seccomp specifies syscall filtering for security
+	// Reduces kernel attack surface by blocking dangerous syscalls
+	Seccomp *LinuxSeccomp `json:"seccomp,omitempty"`
+
+	// MaskedPaths are paths that will be masked with empty read-only files
+	// Prevents access to sensitive kernel interfaces
+	MaskedPaths []string `json:"maskedPaths,omitempty"`
+
+	// ReadonlyPaths are paths that will be made read-only
+	// Prevents modifications to critical system files
+	ReadonlyPaths []string `json:"readonlyPaths,omitempty"`
 }
 
 // Namespace configures a Linux namespace
@@ -137,4 +153,29 @@ type LinuxMemory struct {
 type LinuxPids struct {
 	// Limit is the maximum number of processes/threads
 	Limit int64 `json:"limit"`
+}
+
+// LinuxSeccomp configures syscall filtering for container security
+// Implements seccomp-bpf filtering to reduce kernel attack surface
+type LinuxSeccomp struct {
+	// DefaultAction is the default action for syscalls not in Syscalls list
+	// Common values: "SCMP_ACT_ERRNO" (block), "SCMP_ACT_ALLOW" (allow)
+	DefaultAction string `json:"defaultAction"`
+
+	// Architectures is the list of architectures to apply the profile to
+	// Common values: "SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"
+	Architectures []string `json:"architectures,omitempty"`
+
+	// Syscalls is the list of syscall rules
+	Syscalls []LinuxSyscall `json:"syscalls,omitempty"`
+}
+
+// LinuxSyscall defines a seccomp rule for specific syscalls
+type LinuxSyscall struct {
+	// Names is the list of syscall names this rule applies to
+	Names []string `json:"names"`
+
+	// Action is the action to take when syscall is invoked
+	// Values: "SCMP_ACT_ALLOW", "SCMP_ACT_ERRNO", "SCMP_ACT_KILL", etc.
+	Action string `json:"action"`
 }

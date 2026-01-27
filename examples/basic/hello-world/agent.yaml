@@ -1,0 +1,10 @@
+name: hello-world
+runtime: python3
+module: agent
+entrypoint: handler
+memory: 128
+timeout: 30
+
+scaling:
+  min_workers: 1
+  max_workers: 5
