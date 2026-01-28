@@ -296,6 +296,7 @@ func (a *BasicAutoscaler) applyScaling(
 		a.lastScaleUp[agentID] = false
 	}
 
-	pool.SetDesiredSize(desiredSize)
+	// Trigger reactive scaling (immediate response instead of waiting for maintenance loop)
+	pool.ScaleNow(desiredSize)
 	a.lastScaleTime[agentID] = time.Now()
 }

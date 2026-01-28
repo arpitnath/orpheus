@@ -53,6 +53,9 @@ type PoolManager struct {
 	agentLabels   map[string][]telemetry.Label
 	agentLabelsMu sync.RWMutex
 
+	// Background crash recovery service
+	crashRecovery *CrashRecoveryService
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -61,7 +64,7 @@ type PoolManager struct {
 // NewPoolManager creates a new pool manager.
 func NewPoolManager(registry registry.Registry, autoscaler *scaling.BasicAutoscaler, execlogDir string, serviceManager *service.Manager, ctx context.Context) *PoolManager {
 	ctx, cancel := context.WithCancel(ctx)
-	return &PoolManager{
+	pm := &PoolManager{
 		execlogDir:     execlogDir,
 		registry:       registry,
 		autoscaler:     autoscaler,
@@ -71,6 +74,12 @@ func NewPoolManager(registry registry.Registry, autoscaler *scaling.BasicAutosca
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+
+	// Start background crash recovery service
+	pm.crashRecovery = NewCrashRecoveryService(pm, execlogDir)
+	pm.crashRecovery.Start()
+
+	return pm
 }
 
 // CreatePool creates an autoscaling pool for the given agent.
@@ -305,33 +314,42 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 		return
 	}
 
+	// Determine timeout (use request timeout or default 60s)
+	timeout := req.Timeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+
+	// Create timeout context
+	ctx, cancel := context.WithTimeout(req.Context, timeout)
+	defer cancel()
+
+	// Track start time
 	start := time.Now()
+	req.StartedAt = &start
 
-	// Execute with streaming
-	result, err := daemonWorker.ExecuteStreaming(req.Context, req.Input, req.StreamCh)
-	duration := time.Since(start)
+	// Execute with timeout protection
+	resultCh := make(chan *scaling.Result, 1)
+	errCh := make(chan error, 1)
 
-	// Return worker to pool
-	agentPool.pool.ReturnWorker(worker)
-
-	// Log COMPLETED or FAILED state (best-effort, async)
-	// Check both err != nil AND result.Status != "success" to catch OOM/timeout
-	if err != nil || (result != nil && result.Status != "success") {
-		var errPtr *string
+	go func() {
+		result, err := daemonWorker.ExecuteStreaming(ctx, req.Input, req.StreamCh)
 		if err != nil {
-			errPtr = ptrString(err.Error())
-		} else if result != nil && result.Error != "" {
-			errPtr = ptrString(result.Error)
+			errCh <- err
+		} else {
+			resultCh <- result
 		}
-		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
-			RequestID:  req.ID,
-			State:      execlog.StateFailed,
-			WorkerID:   ptrString(worker.ID()),
-			DurationMs: ptrInt64(duration.Milliseconds()),
-			Error:      errPtr,
-			Source:     ptrString(execlog.SourceHTTP),
-		})
-	} else {
+	}()
+
+	// Wait for result, error, or timeout
+	select {
+	case result := <-resultCh:
+		// SUCCESS PATH
+		duration := time.Since(start)
+		agentPool.pool.ReturnWorker(worker)
+		agentPool.queue.Complete(req.ID)
+
+		// Log COMPLETED
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
 			RequestID:  req.ID,
 			State:      execlog.StateCompleted,
@@ -339,51 +357,121 @@ func (pm *PoolManager) executeStreaming(req *scaling.Request, worker scaling.Wor
 			DurationMs: ptrInt64(duration.Milliseconds()),
 			Source:     ptrString(execlog.SourceHTTP),
 		})
-	}
 
-	// Send final response
-	req.ResponseCh <- &scaling.Response{
-		Result:   result,
-		Error:    err,
-		Duration: duration,
-	}
+		// Send final response
+		req.ResponseCh <- &scaling.Response{
+			Result:   result,
+			Duration: duration,
+		}
 
-	// Close stream channel (signals completion to handler)
-	if req.StreamCh != nil {
-		close(req.StreamCh)
-	}
+		// Close stream channel
+		if req.StreamCh != nil {
+			close(req.StreamCh)
+		}
 
-	// Mark request complete
-	agentPool.queue.Complete(req.ID)
+	case err := <-errCh:
+		// ERROR PATH
+		duration := time.Since(start)
+		agentPool.pool.ReturnWorker(worker)
+		agentPool.queue.Complete(req.ID)
+
+		// Log FAILED
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateFailed,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+			Error:      ptrString(err.Error()),
+			Source:     ptrString(execlog.SourceHTTP),
+		})
+
+		// Send final response
+		req.ResponseCh <- &scaling.Response{
+			Error:    err,
+			Duration: duration,
+		}
+
+		// Close stream channel
+		if req.StreamCh != nil {
+			close(req.StreamCh)
+		}
+
+	case <-ctx.Done():
+		// TIMEOUT PATH
+		duration := time.Since(start)
+
+		// CRITICAL: Always complete to fix metrics
+		agentPool.queue.Complete(req.ID)
+
+		// CRITICAL: DO NOT return worker to pool
+		// Worker is still streaming in the goroutine above
+		// Health check will replace it
+
+		// Log TIMEOUT
+		timeoutMsg := fmt.Sprintf("task timeout after %v", timeout)
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateFailed,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+			Error:      ptrString(timeoutMsg),
+			Source:     ptrString(execlog.SourceHTTP),
+		})
+
+		// Send timeout error
+		req.ResponseCh <- &scaling.Response{
+			Error:    fmt.Errorf(timeoutMsg),
+			Duration: duration,
+		}
+
+		// Close stream channel to signal timeout
+		if req.StreamCh != nil {
+			close(req.StreamCh)
+		}
+
+		log.Printf("[pool-manager] %s: streaming request %s timed out after %v",
+			agentPool.agentName, req.ID, timeout)
+	}
 }
 
 // executeNonStreaming handles non-streaming execution via worker pool.
 func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.Worker, agentPool *AgentPool) {
+	// Determine timeout (use request timeout or default 60s)
+	timeout := req.Timeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+
+	// Create timeout context
+	ctx, cancel := context.WithTimeout(req.Context, timeout)
+	defer cancel()
+
+	// Track start time
 	start := time.Now()
-	result, err := worker.Execute(req.Context, req.Input)
-	duration := time.Since(start)
+	req.StartedAt = &start
 
-	// Return worker to pool
-	agentPool.pool.ReturnWorker(worker)
+	// Execute with timeout protection
+	resultCh := make(chan *scaling.Result, 1)
+	errCh := make(chan error, 1)
 
-	// Log COMPLETED or FAILED state (best-effort, async)
-	// Check both err != nil AND result.Status != "success" to catch OOM/timeout
-	if err != nil || (result != nil && result.Status != "success") {
-		var errPtr *string
+	go func() {
+		result, err := worker.Execute(ctx, req.Input)
 		if err != nil {
-			errPtr = ptrString(err.Error())
-		} else if result != nil && result.Error != "" {
-			errPtr = ptrString(result.Error)
+			errCh <- err
+		} else {
+			resultCh <- result
 		}
-		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
-			RequestID:  req.ID,
-			State:      execlog.StateFailed,
-			WorkerID:   ptrString(worker.ID()),
-			DurationMs: ptrInt64(duration.Milliseconds()),
-			Error:      errPtr,
-			Source:     ptrString(execlog.SourceHTTP),
-		})
-	} else {
+	}()
+
+	// Wait for result, error, or timeout
+	select {
+	case result := <-resultCh:
+		// SUCCESS PATH
+		duration := time.Since(start)
+		agentPool.pool.ReturnWorker(worker)
+		agentPool.queue.Complete(req.ID)
+
+		// Log COMPLETED
 		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
 			RequestID:  req.ID,
 			State:      execlog.StateCompleted,
@@ -391,22 +479,78 @@ func (pm *PoolManager) executeNonStreaming(req *scaling.Request, worker scaling.
 			DurationMs: ptrInt64(duration.Milliseconds()),
 			Source:     ptrString(execlog.SourceHTTP),
 		})
-	}
 
-	// Send response
-	req.ResponseCh <- &scaling.Response{
-		Result:   result,
-		Error:    err,
-		Duration: duration,
-	}
+		// Send response
+		req.ResponseCh <- &scaling.Response{
+			Result:   result,
+			Duration: duration,
+		}
 
-	// Mark request complete
-	agentPool.queue.Complete(req.ID)
+	case err := <-errCh:
+		// ERROR PATH
+		duration := time.Since(start)
+		// Note: worker.Execute() already tracks failures internally
+		agentPool.pool.ReturnWorker(worker)
+		agentPool.queue.Complete(req.ID)
+
+		// Log FAILED
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateFailed,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+			Error:      ptrString(err.Error()),
+			Source:     ptrString(execlog.SourceHTTP),
+		})
+
+		// Send response
+		req.ResponseCh <- &scaling.Response{
+			Error:    err,
+			Duration: duration,
+		}
+
+	case <-ctx.Done():
+		// TIMEOUT PATH
+		duration := time.Since(start)
+
+		// CRITICAL: Always complete to fix metrics
+		agentPool.queue.Complete(req.ID)
+
+		// CRITICAL: DO NOT return worker to pool
+		// Worker is still executing in the goroutine above
+		// When Execute() completes, it will track the failure internally
+		// Health check will detect unhealthy worker and replace it
+
+		// Log TIMEOUT
+		timeoutMsg := fmt.Sprintf("task timeout after %v", timeout)
+		go pm.logExecLogEvent(agentPool.agentName, &execlog.Event{
+			RequestID:  req.ID,
+			State:      execlog.StateFailed,
+			WorkerID:   ptrString(worker.ID()),
+			DurationMs: ptrInt64(duration.Milliseconds()),
+			Error:      ptrString(timeoutMsg),
+			Source:     ptrString(execlog.SourceHTTP),
+		})
+
+		// Send timeout error to user
+		req.ResponseCh <- &scaling.Response{
+			Error:    fmt.Errorf(timeoutMsg),
+			Duration: duration,
+		}
+
+		log.Printf("[pool-manager] %s: request %s timed out after %v",
+			agentPool.agentName, req.ID, timeout)
+	}
 }
 
 // Shutdown gracefully shuts down all pools.
 func (pm *PoolManager) Shutdown(ctx context.Context) error {
 	log.Printf("[pool-manager] Shutting down all pools...")
+
+	// Stop crash recovery service
+	if pm.crashRecovery != nil {
+		pm.crashRecovery.Stop()
+	}
 
 	// Cancel context to stop worker loops
 	pm.cancel()
@@ -1005,6 +1149,138 @@ func (pm *PoolManager) logExecLogEvent(agentName string, event *execlog.Event) {
 	event.Timestamp = time.Now()
 	if err := writer.Log(event); err != nil {
 		log.Printf("Warning: ExecLog write error: %v", err)
+	}
+}
+
+// CrashRecoveryService monitors for stuck requests and marks them as crashed.
+// Runs in the background to detect tasks that timed out but weren't properly cleaned up.
+type CrashRecoveryService struct {
+	poolManager   *PoolManager
+	execlogDir    string
+	checkInterval time.Duration // How often to check for stuck requests (default: 10s)
+	timeout       time.Duration // Consider stuck after this duration (default: 90s)
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+}
+
+// NewCrashRecoveryService creates a new crash recovery service.
+func NewCrashRecoveryService(pm *PoolManager, execlogDir string) *CrashRecoveryService {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &CrashRecoveryService{
+		poolManager:   pm,
+		execlogDir:    execlogDir,
+		checkInterval: 10 * time.Second,
+		timeout:       90 * time.Second, // 1.5x default task timeout
+		ctx:           ctx,
+		cancel:        cancel,
+	}
+}
+
+// Start begins the background recovery monitoring.
+func (s *CrashRecoveryService) Start() {
+	s.wg.Add(1)
+	go s.recoveryLoop()
+	log.Printf("[crash-recovery] Started background recovery service (check=%v, timeout=%v)",
+		s.checkInterval, s.timeout)
+}
+
+// Stop gracefully stops the recovery service.
+func (s *CrashRecoveryService) Stop() {
+	s.cancel()
+	s.wg.Wait()
+	log.Printf("[crash-recovery] Stopped")
+}
+
+// recoveryLoop runs continuously to detect and recover stuck requests.
+func (s *CrashRecoveryService) recoveryLoop() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(s.checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.detectAndRecover()
+		}
+	}
+}
+
+// detectAndRecover finds stuck requests and marks them as crashed.
+func (s *CrashRecoveryService) detectAndRecover() {
+	// Get snapshot of all pools
+	s.poolManager.mu.RLock()
+	pools := make(map[string]*AgentPool)
+	for name, pool := range s.poolManager.pools {
+		pools[name] = pool
+	}
+	s.poolManager.mu.RUnlock()
+
+	// Check each agent for stuck requests
+	for agentName, agentPool := range pools {
+		reader, err := execlog.NewReader(s.execlogDir, agentName)
+		if err != nil {
+			log.Printf("[crash-recovery] %s: failed to open execlog: %v", agentName, err)
+			continue
+		}
+
+		// Get all crashed requests (STARTED but no terminal state)
+		crashedRequests, err := reader.GetCrashedRequests()
+		reader.Close()
+
+		if err != nil {
+			log.Printf("[crash-recovery] %s: failed to query crashed requests: %v", agentName, err)
+			continue
+		}
+
+		if len(crashedRequests) == 0 {
+			continue
+		}
+
+		// Filter by timeout threshold (only recover if started >90s ago)
+		now := time.Now()
+		var stuckRequests []*execlog.CrashedRequest
+		for _, req := range crashedRequests {
+			if now.Sub(req.StartedAt) > s.timeout {
+				stuckRequests = append(stuckRequests, req)
+			}
+		}
+
+		if len(stuckRequests) == 0 {
+			continue
+		}
+
+		// Recover each stuck request
+		writer, err := execlog.NewWriter(s.execlogDir, agentName)
+		if err != nil {
+			log.Printf("[crash-recovery] %s: failed to open writer: %v", agentName, err)
+			continue
+		}
+
+		for _, req := range stuckRequests {
+			// Mark as CRASHED in ExecLog
+			event := &execlog.Event{
+				Timestamp: time.Now(),
+				RequestID: req.RequestID,
+				State:     execlog.StateCrashed,
+				Error:     ptrString(fmt.Sprintf("stuck request recovery (started %v ago)", now.Sub(req.StartedAt))),
+			}
+
+			if err := writer.Log(event); err != nil {
+				log.Printf("[crash-recovery] %s: failed to mark %s as crashed: %v",
+					agentName, req.RequestID, err)
+				continue
+			}
+
+			// CRITICAL: Fix metrics by calling Complete()
+			agentPool.queue.Complete(req.RequestID)
+
+			log.Printf("[crash-recovery] %s: recovered stuck request %s (started %v ago)",
+				agentName, req.RequestID, now.Sub(req.StartedAt))
+		}
 	}
 }
 

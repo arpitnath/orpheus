@@ -299,6 +299,11 @@ func (m *mockWorkerPool) SetDesiredSize(size int) {
 	m.desiredSize = size
 }
 
+func (m *mockWorkerPool) ScaleNow(size int) {
+	// Mock implementation - same as SetDesiredSize for testing
+	m.SetDesiredSize(size)
+}
+
 func (m *mockWorkerPool) GetIdleWorker(ctx context.Context) (Worker, error) {
 	return nil, nil
 }

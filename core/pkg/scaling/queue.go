@@ -24,7 +24,8 @@ type Request struct {
 	StreamCh   chan *StreamEvent // Optional: for SSE streaming (nil for non-streaming requests)
 	QueuedAt   time.Time
 	StartedAt  *time.Time
-	SessionID  string // Optional: session ID for worker affinity (from X-Session-ID header)
+	SessionID  string        // Optional: session ID for worker affinity (from X-Session-ID header)
+	Timeout    time.Duration // Optional: per-request timeout (0 = use default 60s)
 }
 
 // Response represents the result of an agent execution.

@@ -1,6 +1,218 @@
 ---
 title: 'Common Issues'
-description: 'Solutions to frequent problems'
+description: 'Solutions to frequent problems and errors'
+---
+
+## Requests Hang Indefinitely
+
+**Symptoms:**
+- `orpheus run` never returns
+- No error message, just waiting
+- Request shows as "STARTED" in execlog but never completes
+
+**Diagnosis:**
+```bash
+# Check if request is stuck
+orpheus runs <agent> --status STARTED
+
+# Check queue metrics
+curl http://localhost:7777/v1/stats
+```
+
+**Common Causes:**
+1. Worker crashed during execution (OOM, segfault)
+2. Agent code has infinite loop
+3. External API not responding
+
+**Solutions:**
+
+Immediate fix:
+```bash
+# Restart daemon to clear stuck workers
+sudo systemctl restart orpheusd  # Linux
+# or
+orpheus vm restart  # macOS
+```
+
+Long-term fix:
+```yaml
+# In agent.yaml - increase timeout if legitimate
+timeout: 120  # Allow more time for slow operations
+```
+
+---
+
+## "Queue is Full" Errors
+
+**Symptoms:**
+- HTTP 503 "agent queue is full"
+- Requests rejected immediately
+
+**Diagnosis:**
+```bash
+# Check queue depth
+curl http://localhost:7777/v1/agents/<agent>/stats
+```
+
+**Common Causes:**
+1. Queue size too small for burst traffic
+2. All workers busy, queue fills up
+3. max_workers limit reached
+
+**Solutions:**
+
+Increase queue capacity:
+```yaml
+# agent.yaml
+scaling:
+  queue_size: 100  # Was 50
+```
+
+Increase worker count:
+```yaml
+scaling:
+  max_workers: 20  # Was 10
+```
+
+Client-side backoff:
+```python
+import time
+for attempt in range(5):
+    try:
+        response = orpheus.run(agent, input)
+        break
+    except QueueFullError:
+        time.sleep(pow(2, attempt))  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+```
+
+---
+
+## Task Timeout Errors
+
+**Symptoms:**
+- Error: "task timeout after 60s"
+- Task is killed mid-execution
+
+**Diagnosis:**
+```bash
+# Check timeout configuration
+orpheus config show <agent> | grep timeout
+
+# Check task duration distribution
+orpheus runs <agent> --limit 100 | grep duration
+```
+
+**Common Causes:**
+1. Slow external API calls (LLM APIs can take 10-30s)
+2. Large file processing
+3. Inefficient code
+
+**Solutions:**
+
+Increase timeout:
+```yaml
+# agent.yaml
+timeout: 120  # Allow 2 minutes
+```
+
+Optimize agent code:
+```python
+# Add progress logging to identify bottleneck
+logger.info("Starting LLM call...")
+result = llm.call(prompt)  # Identify slow operations
+logger.info("LLM call completed")
+```
+
+Chunk large operations:
+```python
+# Process in chunks to stay within timeout
+for chunk in chunks(large_data, size=100):
+    process(chunk)
+```
+
+---
+
+## "Seccomp Blocked Syscall" Errors
+
+**Symptoms:**
+- Error: "Operation not permitted"
+- EPERM error in logs
+
+**Diagnosis:**
+```bash
+# Check agent logs for syscall errors
+orpheus logs <agent> | grep -i "permission\|eperm"
+```
+
+**Common Causes:**
+1. Using os.system() or subprocess for admin commands (mount, reboot, etc.)
+2. Trying to debug with ptrace
+3. Using native extensions with blocked syscalls
+
+**Solutions:**
+
+Check allowed syscalls in the [Security Model](/security)
+
+Rewrite code to avoid blocked operations:
+```python
+# Instead of mounting (blocked):
+import os
+os.mount("/dev/sda", "/mnt", "ext4")  # ✗ Blocked by seccomp
+
+# Use provided mounts:
+with open("/workspace/data.txt", "w") as f:  # ✓ Allowed
+    f.write(data)
+```
+
+If you have a legitimate use case for a blocked syscall, file an issue on GitHub.
+
+---
+
+## Circuit Breaker Opened
+
+**Symptoms:**
+- Error: "circuit breaker open (cooldown: 45s remaining)"
+- Workers not spawning
+- Pool stuck at low capacity
+
+**Diagnosis:**
+```bash
+# Check logs for spawn failures
+orpheus logs daemon | grep "circuit breaker"
+orpheus logs daemon | grep "spawn failed"
+```
+
+**Common Causes:**
+1. Repeated worker spawn failures (5 consecutive failures opens circuit)
+2. Image not available
+3. runc errors
+
+**Solutions:**
+
+Wait for cooldown (60 seconds):
+```bash
+# Circuit breaker will automatically retry after 60s
+# Monitor logs:
+orpheus logs daemon | tail -f
+```
+
+Fix underlying issue:
+```bash
+# Check if image exists
+ls ~/.orpheus/images/<agent>/rootfs
+
+# Check runc works
+runc --version
+
+# Manually test spawn
+orpheus test-spawn <agent>
+```
+
+Manual reset (restart daemon):
+```bash
+sudo systemctl restart orpheusd
+```
+
 ---
 
 ## Agent Won't Deploy
@@ -49,27 +261,57 @@ sudo systemctl start orpheusd
 
 ---
 
-## Worker Timeout
+## Out of Memory (OOM)
 
-**Error:** Request killed, no response
+**Symptoms:**
+- Worker crashes during execution
+- Exit code 137 (SIGKILL)
+- Logs show "killed" or "OOM"
 
-**Cause:** Task took longer than `timeout` in `agent.yaml`
+**Diagnosis:**
+```bash
+# Check memory limit
+orpheus config show <agent> | grep memory
+```
 
-**Fix:** Increase timeout:
+**Solutions:**
+
+Increase memory limit:
 ```yaml
-timeout: 600  # 10 minutes
+# agent.yaml
+memory: 1024  # Increase to 1GB
+```
+
+Optimize memory usage:
+```python
+# Stream large files instead of loading all at once
+with open("large_file.txt", "r") as f:
+    for line in f:  # Iterate, don't load all
+        process(line)
 ```
 
 ---
 
-## Out of Memory
+## Slow Autoscaling
 
-**Symptom:** Worker crashes during execution
+**Symptoms:**
+- First concurrent request is slow
+- Takes several seconds to scale up
 
-**Fix:** Increase memory limit:
+**Common Causes:**
+1. min_workers too low (starting from 1 worker)
+2. Cold start (first worker spawn takes 50-200ms)
+
+**Solutions:**
+
+Pre-warm workers:
 ```yaml
-memory: 2048  # 2GB
+# agent.yaml
+scaling:
+  min_workers: 3  # Keep 3 workers always running
+  max_workers: 10
 ```
+
 
 ---
 
@@ -114,6 +356,38 @@ with open('/workspace/data.json', 'w') as f: ...
 
 ---
 
+## High Memory Usage on Host
+
+**Symptoms:**
+- Host memory usage growing over time
+- Many orpheus-worker processes
+
+**Diagnosis:**
+```bash
+# Check number of containers
+ps aux | grep runc | wc -l
+
+# Check worker count
+orpheus status
+```
+
+**Solutions:**
+
+Reduce max_workers:
+```yaml
+# agent.yaml
+scaling:
+  max_workers: 10  # Reduce from higher value
+```
+
+Enable aggressive scale-down:
+```yaml
+scaling:
+  scale_down_threshold: 0.8  # Scale down earlier
+```
+
+---
+
 ## Port Already in Use
 
 **Error:** `address already in use :7777`
@@ -124,8 +398,33 @@ with open('/workspace/data.json', 'w') as f: ...
 lsof -i :7777
 
 # Kill it or use different port
-orpheusd --port 7778
+orpheusd --tcp-bind :7778
 ```
+
+---
+
+## Getting Help
+
+### Before Filing an Issue
+
+1. Check this troubleshooting guide
+2. Check the [Security Model](/security) for security-related issues
+3. Check [Capacity Planning](/guides/capacity-planning) for scaling issues
+4. Search existing issues on GitHub
+
+### Filing a Good Issue
+
+Include:
+- Orpheus version: `orpheus version`
+- Operating system: `uname -a`
+- Daemon logs: `orpheus logs daemon | tail -50`
+- Agent config: `cat agent.yaml`
+- Steps to reproduce
+
+### Community
+
+- GitHub Issues: https://github.com/orpheus-systems/orpheus/issues
+- Discussions: https://github.com/orpheus-systems/orpheus/discussions
 
 <Card title="Debug with ExecLog" icon="search" href="/troubleshooting/execlog-debugging">
   Find what went wrong →

@@ -15,9 +15,10 @@ import (
 
 	"orpheus/daemon/pkg/daemon"
 	"orpheus/daemon/pkg/execlog"
+	"orpheus/daemon/pkg/version"
 )
 
-const version = "0.1.0"
+var appVersion = version.Read()
 
 func main() {
 	// Check for subcommands
@@ -30,7 +31,7 @@ func main() {
 			printHelp()
 			return
 		case "--version", "-v", "version":
-			fmt.Printf("orpheusd %s\n", version)
+			fmt.Printf("orpheusd %s\n", appVersion)
 			return
 		}
 	}
@@ -95,7 +96,7 @@ func runServer() {
 	}
 
 	// Create server
-	server, err := daemon.NewServer(config, version, execlogDir)
+	server, err := daemon.NewServer(config, appVersion, execlogDir)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
@@ -121,7 +122,7 @@ func runServer() {
 		}
 	}()
 
-	log.Printf("Starting orpheusd %s on %s", version, *socketPath)
+	log.Printf("Starting orpheusd %s on %s", appVersion, *socketPath)
 	if err := server.ListenAndServe(ctx); err != nil && ctx.Err() == nil {
 		log.Fatalf("Server error: %v", err)
 	}
@@ -138,7 +139,7 @@ func defaultSocket() string {
 }
 
 func printHelp() {
-	fmt.Printf("orpheusd %s\n\n", version)
+	fmt.Printf("orpheusd %s\n\n", appVersion)
 	fmt.Println("Usage:")
 	fmt.Println("  orpheusd [serve] [flags]    Run the daemon server")
 	fmt.Println("")

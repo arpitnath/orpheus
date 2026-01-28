@@ -102,6 +102,8 @@ func GenerateSpec(cfg *config.AgentConfig) *Spec {
 				Permitted:   []string{},
 				Ambient:     []string{},
 			},
+			// Security: Prevent privilege escalation via setuid binaries
+			NoNewPrivileges: true,
 		},
 		Root: &Root{
 			Path:     "rootfs",
@@ -112,18 +114,19 @@ func GenerateSpec(cfg *config.AgentConfig) *Spec {
 				Destination: "/proc",
 				Type:        "proc",
 				Source:      "proc",
+				Options:     []string{"nosuid", "nodev", "noexec"},
 			},
 			{
 				Destination: "/dev",
 				Type:        "tmpfs",
 				Source:      "tmpfs",
-				Options:     []string{"nosuid", "strictatime", "mode=755", "size=65536k"},
+				Options:     []string{"nosuid", "noexec", "strictatime", "mode=755", "size=65536k"},
 			},
 			{
 				Destination: "/tmp",
 				Type:        "tmpfs",
 				Source:      "tmpfs",
-				Options:     []string{"nosuid", "nodev", "mode=1777"},
+				Options:     []string{"nosuid", "nodev", "noexec", "mode=1777"},
 			},
 		},
 		Linux: &Linux{
@@ -142,6 +145,25 @@ func GenerateSpec(cfg *config.AgentConfig) *Spec {
 				Pids: &LinuxPids{
 					Limit: DefaultPidsLimit,
 				},
+			},
+			// Security: Syscall filtering via seccomp-bpf
+			Seccomp: DefaultSeccompProfile(),
+			// Security: Mask dangerous paths in /proc and /sys
+			MaskedPaths: []string{
+				"/proc/kcore",
+				"/proc/kallsyms",
+				"/proc/sched_debug",
+				"/proc/keys",
+				"/proc/timer_list",
+				"/proc/sys/kernel/core_pattern",
+				"/proc/sys/kernel/modprobe",
+				"/sys/firmware",
+				"/sys/kernel/debug",
+			},
+			// Security: Make sensitive paths read-only
+			ReadonlyPaths: []string{
+				"/proc/sys",
+				"/sys",
 			},
 		},
 	}
@@ -210,8 +232,31 @@ func GenerateSpecWithOptions(cfg *config.AgentConfig, opts *SpecOptions) *Spec {
 	}
 
 	// Append additional mounts (e.g., workspace bind mount)
+	// Apply security hardening to workspace mounts
 	if len(opts.AdditionalMounts) > 0 {
-		spec.Mounts = append(spec.Mounts, opts.AdditionalMounts...)
+		for _, mount := range opts.AdditionalMounts {
+			// Harden workspace mount with security options
+			if mount.Destination == "/workspace" {
+				// Ensure nosuid and nodev are present
+				hasNosuid := false
+				hasNodev := false
+				for _, opt := range mount.Options {
+					if opt == "nosuid" {
+						hasNosuid = true
+					}
+					if opt == "nodev" {
+						hasNodev = true
+					}
+				}
+				if !hasNosuid {
+					mount.Options = append(mount.Options, "nosuid")
+				}
+				if !hasNodev {
+					mount.Options = append(mount.Options, "nodev")
+				}
+			}
+			spec.Mounts = append(spec.Mounts, mount)
+		}
 	}
 
 	return spec

@@ -35,6 +35,16 @@ type BasicWorkerPool struct {
 	sessionWorkers   map[string]string
 	sessionWorkersMu sync.RWMutex
 
+	// Reactive scaling infrastructure
+	scaleSignal     chan struct{} // Buffered channel for immediate scaling triggers
+	scaleEventCount atomic.Int64  // Metrics counter for scaling events
+
+	// Circuit breaker for spawn failures
+	spawnFailures      atomic.Int32  // Consecutive spawn failure count
+	circuitBreakerOpen atomic.Bool   // Circuit breaker state
+	lastSpawnFailure   time.Time     // Last spawn failure timestamp
+	circuitMu          sync.Mutex    // Protects lastSpawnFailure
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -54,6 +64,7 @@ func NewWorkerPool(agentID string, spawner WorkerSpawner, policy ScalingPolicy) 
 		replacementAttempts: make(map[string]int),
 		lastReplacementTime: time.Now(),
 		sessionWorkers:      make(map[string]string),
+		scaleSignal:         make(chan struct{}, 1), // Buffered channel for reactive scaling
 		ctx:                 ctx,
 		cancel:              cancel,
 	}
@@ -120,6 +131,46 @@ func (p *BasicWorkerPool) SetDesiredSize(size int) {
 		p.metricsMu.Unlock()
 
 		log.Printf("[pool] %s desired size changed: %d → %d", p.agentID, old, size)
+	}
+}
+
+// ScaleNow triggers immediate reactive scaling to the target size.
+// Unlike SetDesiredSize which waits for the maintenance loop, this sends
+// a signal to trigger scaling immediately (sub-second response).
+func (p *BasicWorkerPool) ScaleNow(size int) {
+	// Clamp to policy bounds
+	if size < p.policy.MinWorkers {
+		size = p.policy.MinWorkers
+	}
+	if size > p.policy.MaxWorkers {
+		size = p.policy.MaxWorkers
+	}
+
+	// Atomic swap of desired size
+	old := int(p.desiredSize.Swap(int32(size)))
+	if old == size {
+		return // No change needed
+	}
+
+	// Update metrics and tracking
+	p.metricsMu.Lock()
+	p.lastScaleTime = time.Now()
+	if size > old {
+		p.scaleReason = fmt.Sprintf("reactive_scale_up_%d_to_%d", old, size)
+	} else {
+		p.scaleReason = fmt.Sprintf("reactive_scale_down_%d_to_%d", old, size)
+	}
+	p.scaleEventCount.Add(1)
+	p.metricsMu.Unlock()
+
+	log.Printf("[pool] %s: ScaleNow %d → %d (reactive)", p.agentID, old, size)
+
+	// Send signal for immediate scaling (non-blocking)
+	select {
+	case p.scaleSignal <- struct{}{}:
+		// Signal sent successfully
+	default:
+		// Signal already pending, scaling will happen anyway
 	}
 }
 
@@ -399,9 +450,44 @@ func (p *BasicWorkerPool) Shutdown(ctx context.Context) error {
 
 // spawnWorker creates a new worker and adds it to the pool.
 func (p *BasicWorkerPool) spawnWorker() error {
+	// Circuit breaker check
+	if p.circuitBreakerOpen.Load() {
+		p.circuitMu.Lock()
+		timeSinceFailure := time.Since(p.lastSpawnFailure)
+		p.circuitMu.Unlock()
+
+		if timeSinceFailure < 60*time.Second {
+			// Circuit is open - reject spawn attempts during cooldown
+			remaining := 60*time.Second - timeSinceFailure
+			return fmt.Errorf("circuit breaker open (cooldown: %v remaining)", remaining)
+		}
+		// Circuit is half-open - allow one spawn attempt
+		log.Printf("[pool] %s: circuit breaker half-open, attempting spawn", p.agentID)
+	}
+
+	// Attempt to spawn worker
 	worker, err := p.spawner.SpawnWorker(p.ctx, p.agentID)
 	if err != nil {
+		// Track failure
+		failures := p.spawnFailures.Add(1)
+
+		if failures >= 5 {
+			// Open circuit breaker after 5 consecutive failures
+			p.circuitBreakerOpen.Store(true)
+			p.circuitMu.Lock()
+			p.lastSpawnFailure = time.Now()
+			p.circuitMu.Unlock()
+			log.Printf("[pool] %s: circuit breaker opened after %d consecutive failures", p.agentID, failures)
+		}
+
 		return fmt.Errorf("failed to spawn worker: %w", err)
+	}
+
+	// Success - reset circuit breaker
+	p.spawnFailures.Store(0)
+	if p.circuitBreakerOpen.Load() {
+		p.circuitBreakerOpen.Store(false)
+		log.Printf("[pool] %s: circuit breaker closed after successful spawn", p.agentID)
 	}
 
 	p.workersMu.Lock()
@@ -452,7 +538,8 @@ func (p *BasicWorkerPool) removeWorker(workerID string) error {
 	return nil
 }
 
-// maintenanceLoop periodically performs pool maintenance.
+// maintenanceLoop handles both reactive scaling and periodic maintenance.
+// It responds immediately to scaling signals while still performing periodic health checks.
 func (p *BasicWorkerPool) maintenanceLoop() {
 	defer p.wg.Done()
 
@@ -463,16 +550,28 @@ func (p *BasicWorkerPool) maintenanceLoop() {
 		select {
 		case <-p.ctx.Done():
 			return
+
+		case <-p.scaleSignal:
+			// Reactive scaling path - immediate response to autoscaler
+			log.Printf("[pool] %s: reactive scaling triggered", p.agentID)
+			p.performScaling()
+
 		case <-ticker.C:
+			// Periodic maintenance path - scaling + health checks
 			p.performMaintenance()
 		}
 	}
 }
 
-// performMaintenance handles scaling and cleanup operations.
-func (p *BasicWorkerPool) performMaintenance() {
+// performScaling reconciles current worker count with desired size.
+// This is called both reactively (on signal) and periodically (maintenance loop).
+func (p *BasicWorkerPool) performScaling() {
 	current := p.Size()
 	desired := p.DesiredSize()
+
+	if current == desired {
+		return // Already at desired size
+	}
 
 	// Scale up if needed
 	if current < desired {
@@ -513,6 +612,13 @@ func (p *BasicWorkerPool) performMaintenance() {
 			log.Printf("[pool] %s: removed %d idle workers", p.agentID, removed)
 		}
 	}
+}
+
+// performMaintenance handles both scaling and health check operations.
+// Called periodically by the maintenance loop.
+func (p *BasicWorkerPool) performMaintenance() {
+	// Reconcile worker count with desired size
+	p.performScaling()
 
 	// Health check all workers
 	p.performHealthCheck()
