@@ -4,7 +4,7 @@ Orpheus is designed for running **trusted internal code** in isolated containers
 
 ---
 
-## Current Security Posture (v0.1.1)
+## Current Security Posture (aurora-0.1.2)
 
 ### What Orpheus Protects Against
 
@@ -100,7 +100,7 @@ Orpheus is designed for scenarios where:
 
 **Default action**: Block (SCMP_ACT_ERRNO)
 
-**Allowed syscalls** (~208):
+**Allowed syscalls** (~211):
 - File I/O: read, write, open, close, stat, etc.
 - Memory: mmap, munmap, mprotect, brk
 - Process: fork, clone, execve, exit, wait4
@@ -156,7 +156,7 @@ These paths are visible but cannot be modified:
 
 ## Roadmap
 
-### v0.1.1 (Current)
+### aurora-0.1.2 (Current)
 ✅ Seccomp profile (Docker default)
 ✅ NoNewPrivileges flag
 ✅ Mount hardening (nosuid, nodev, noexec)
@@ -334,4 +334,4 @@ If a syscall you need is blocked, file an issue at https://github.com/orpheus-ai
 ---
 
 **Last Updated**: 2026-01-27
-**Version**: v0.1.1
+**Version**: aurora-0.1.2
