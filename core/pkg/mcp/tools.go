@@ -22,8 +22,7 @@ type ExecuteOutput struct {
 	Duration int64                  `json:"duration_ms" jsonschema:"Execution duration in milliseconds"`
 }
 
-// registerAgentTools registers MCP tools for an agent.
-// For v0.1.0, registers a single "execute" tool that runs the agent.
+// Registers a single "execute" tool that runs the agent.
 func registerAgentTools(
 	mcpServer *sdk.Server,
 	instance AgentInstance,
@@ -109,8 +108,8 @@ type mcpRequestImpl struct {
 	responseCh chan Response
 }
 
-func (r *mcpRequestImpl) GetID() string                    { return r.id }
-func (r *mcpRequestImpl) GetInput() []byte                 { return r.input }
+func (r *mcpRequestImpl) GetID() string                     { return r.id }
+func (r *mcpRequestImpl) GetInput() []byte                  { return r.input }
 func (r *mcpRequestImpl) GetResponseChannel() chan Response { return r.responseCh }
 
 // generateRequestID generates a unique request ID.

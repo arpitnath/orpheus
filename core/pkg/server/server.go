@@ -91,7 +91,7 @@ func New(serverCfg *config.ServerConfig) (*Server, error) {
 		s.instances[agentID] = instance
 	}
 
-	// Initialize MCP support (v0.1.0: always enabled)
+	// Initialize MCP support (always enabled)
 	s.mcpEnabled = true
 	s.mcpManager = mcp.NewMCPServerManager(s)
 	log.Printf("MCP server manager initialized")
