@@ -15,12 +15,9 @@ Unlike traditional serverless functions or container orchestrators, it utilizes 
 
 The system optimizes for time and continuity rather than just latency, using **queue-depth autoscaling** to manage I/O-bound workloads that typically idle while waiting for LLM responses.
 
-Key components like the ServiceManager and Registry enable seamless integration with local inference engines like Ollama and vLLM, providing a platform-agnostic environment for complex reasoning systems.
+And the ServiceManager and Registry enable seamless integration with local inference engines like Ollama and vLLM, providing a platform-agnostic environment for complex reasoning systems.
 
-Recent technical refinements have introduced an actor model to eliminate race conditions and an ExecLog system for crash recovery and auditability.
-
-Ultimately, Orpheus bridges the gap between simple script execution and heavyweight cloud orchestration, the essential substrate for industrial-grade LLM applications.
-
+With an actor model to eliminate race conditions and an ExecLog system for crash recovery and auditability.
 
 
 ## When to Use Orpheus
