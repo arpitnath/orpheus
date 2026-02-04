@@ -13,7 +13,7 @@ description: 'Solutions to frequent problems and errors'
 **Diagnosis:**
 ```bash
 # Check if request is stuck
-orpheus runs <agent> --status STARTED
+orpheus execlog list <agent> --status STARTED
 
 # Check queue metrics
 curl http://localhost:7777/v1/stats
@@ -99,7 +99,7 @@ for attempt in range(5):
 orpheus config show <agent> | grep timeout
 
 # Check task duration distribution
-orpheus runs <agent> --limit 100 | grep duration
+orpheus execlog list <agent> --limit 100 | grep duration
 ```
 
 **Common Causes:**
@@ -141,7 +141,7 @@ for chunk in chunks(large_data, size=100):
 **Diagnosis:**
 ```bash
 # Check agent logs for syscall errors
-orpheus logs <agent> | grep -i "permission\|eperm"
+sudo journalctl -u orpheusd | grep <agent> | grep -i "permission\|eperm"
 ```
 
 **Common Causes:**
@@ -178,8 +178,8 @@ If you have a legitimate use case for a blocked syscall, file an issue on GitHub
 **Diagnosis:**
 ```bash
 # Check logs for spawn failures
-orpheus logs daemon | grep "circuit breaker"
-orpheus logs daemon | grep "spawn failed"
+sudo journalctl -u orpheusd | grep "circuit breaker"
+sudo journalctl -u orpheusd | grep "spawn failed"
 ```
 
 **Common Causes:**
@@ -193,7 +193,7 @@ Wait for cooldown (60 seconds):
 ```bash
 # Circuit breaker will automatically retry after 60s
 # Monitor logs:
-orpheus logs daemon | tail -f
+sudo journalctl -u orpheusd | tail -f
 ```
 
 Fix underlying issue:
@@ -417,7 +417,7 @@ orpheusd --tcp-bind :7778
 Include:
 - Orpheus version: `orpheus version`
 - Operating system: `uname -a`
-- Daemon logs: `orpheus logs daemon | tail -50`
+- Daemon logs: `sudo journalctl -u orpheusd | tail -50`
 - Agent config: `cat agent.yaml`
 - Steps to reproduce
 

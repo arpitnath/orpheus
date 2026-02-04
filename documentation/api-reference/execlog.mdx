@@ -63,10 +63,10 @@ curl "http://localhost:7777/v1/execlog?agent=my-agent&state=failed"
 
 ```bash
 # List recent runs
-orpheus runs my-agent -n 10
+orpheus execlog list my-agent -n 10
 
 # Filter by state
-orpheus runs my-agent --state failed
+orpheus execlog list my-agent --state failed
 ```
 
 <Card title="Back to API" icon="book" href="/api-reference/introduction">

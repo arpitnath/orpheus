@@ -93,7 +93,7 @@ Shows workers, queue depth, health status.
 View execution history.
 
 ```bash
-orpheus runs <name>
+orpheus execlog list <name>
 ```
 
 **Options:**
@@ -103,8 +103,8 @@ orpheus runs <name>
 
 **Example:**
 ```bash
-orpheus runs my-agent -n 10 --state failed
-orpheus runs my-agent --source mcp
+orpheus execlog list my-agent -n 10 --state failed
+orpheus execlog list my-agent --source mcp
 ```
 
 ---

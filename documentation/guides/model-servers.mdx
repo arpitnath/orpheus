@@ -173,7 +173,7 @@ orpheus_service_uptime_seconds{agent="my-agent"} 3600
 
 **Check logs:**
 ```bash
-orpheus logs my-agent
+sudo journalctl -u orpheusd | grep my-agent
 ```
 
 **Common causes:**

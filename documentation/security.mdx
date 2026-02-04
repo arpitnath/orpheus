@@ -252,7 +252,7 @@ iptables -A OUTPUT -j DROP  # Block everything else
 
 ```bash
 # Check for failed tasks (potential exploit attempts)
-orpheus runs my-agent --status FAILED | grep -i "permission\|syscall"
+orpheus execlog list my-agent --status FAILED | grep -i "permission\|syscall"
 
 # Monitor metrics for unusual patterns
 curl http://localhost:7777/metrics | grep orpheus_task_
@@ -293,7 +293,7 @@ No. Security features are always enabled and cannot be disabled. The performance
 Check logs for "permission denied" or "operation not permitted" errors:
 
 ```bash
-orpheus logs my-agent | grep -i "permission\|permitted"
+sudo journalctl -u orpheusd | grep my-agent | grep -i "permission\|permitted"
 ```
 
 If a syscall you need is blocked, file an issue on GitHub.

@@ -8,7 +8,7 @@ Every request is tracked in ExecLog. Use it to debug issues.
 ## View Recent Executions
 
 ```bash
-orpheus runs my-agent
+orpheus execlog list my-agent
 ```
 
 **Output:**
@@ -23,10 +23,10 @@ c3d4e5f6-a7b8-9012-cdef-123456789012  completed  2.1s      my-agent-worker-1
 
 ```bash
 # Only failed requests
-orpheus runs my-agent --state failed
+orpheus execlog list my-agent --state failed
 
 # Only crashed (daemon died mid-request)
-orpheus runs my-agent --state crashed
+orpheus execlog list my-agent --state crashed
 ```
 
 ## Request States
@@ -43,7 +43,7 @@ orpheus runs my-agent --state crashed
 
 1. **Find the failed request:**
    ```bash
-   orpheus runs my-agent --state failed
+   orpheus execlog list my-agent --state failed
    ```
 
 2. **Get details:**
@@ -58,7 +58,7 @@ orpheus runs my-agent --state crashed
 Crashed = daemon died while request was running
 
 ```bash
-orpheus runs my-agent --state crashed
+orpheus execlog list my-agent --state crashed
 ```
 
 Crashed requests are NOT auto-retried (safe-first design). You decide:
