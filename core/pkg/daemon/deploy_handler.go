@@ -41,6 +41,45 @@ type DeployProgressEvent struct {
 	Progress int    `json:"progress"`
 }
 
+// detectAgentDirectory finds the agent code directory in an extracted tar archive.
+// It handles multiple tar structures:
+// 1. Single top-level directory: myagent/agent.yaml -> returns myagent/
+// 2. Flat structure: agent.yaml at root -> returns root
+// 3. Multiple directories: searches for directory containing agent.yaml
+func detectAgentDirectory(extractDir string) (string, error) {
+	entries, err := os.ReadDir(extractDir)
+	if err != nil {
+		return "", fmt.Errorf("read extract dir: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return "", fmt.Errorf("empty tar archive")
+	}
+
+	// Check if agent.yaml is at root level (flat structure)
+	if _, err := os.Stat(filepath.Join(extractDir, "agent.yaml")); err == nil {
+		return extractDir, nil
+	}
+
+	// Look for directories containing agent.yaml
+	var candidateDirs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirPath := filepath.Join(extractDir, entry.Name())
+			if _, err := os.Stat(filepath.Join(dirPath, "agent.yaml")); err == nil {
+				candidateDirs = append(candidateDirs, dirPath)
+			}
+		}
+	}
+
+	if len(candidateDirs) == 0 {
+		return "", fmt.Errorf("no valid agent directory found (missing agent.yaml)")
+	}
+
+	// Use first directory containing agent.yaml
+	return candidateDirs[0], nil
+}
+
 // handleDeploy handles POST /v1/deploy for remote agent deployment.
 func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -203,19 +242,19 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Agent code is in tempExtractDir/{agentName}/
-	tempAgentDir := filepath.Join(tempExtractDir, agentName)
-
-	// Verify agent.yaml exists
-	agentYAML := filepath.Join(tempAgentDir, "agent.yaml")
-	if _, err := os.Stat(agentYAML); os.IsNotExist(err) {
+	// Auto-detect agent directory from tar structure
+	tempAgentDir, err := detectAgentDirectory(tempExtractDir)
+	if err != nil {
+		log.Printf("ERROR: Failed to detect agent directory: %v", err)
 		if useSSE {
-			emitError("validating", "agent.yaml not found in uploaded tar")
+			emitError("validating", fmt.Sprintf("invalid tar structure: %v", err))
 		} else {
-			writeError(w, http.StatusBadRequest, "agent.yaml not found in uploaded tar")
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid tar structure: %v", err))
 		}
 		return
 	}
+
+	log.Printf("Detected agent directory: %s", tempAgentDir)
 
 	// Load agent.yaml to get runtime
 	agentConfig, err := config.Load(tempAgentDir)

@@ -20,13 +20,12 @@ import { ExecLogCrashed } from './components/ExecLogCrashed.js';
 import { AgentPs } from './components/AgentPs.js';
 import { AgentInspect } from './components/inspect/index.js';
 import { PoolStats } from './components/PoolStats.js';
-import type { ExecLogFilters } from './types/index.js';
 import { HealthCheck } from './components/HealthCheck.js';
 import { Validate } from './components/Validate.js';
 import { c, label } from './lib/format.js';
 
 //@VERSION
-const VERSION = '0.1.0';
+const VERSION = '0.1.4';
 
 //@PROGRAM
 const program = new Command();
@@ -324,76 +323,6 @@ program
 //@OBSERVABILITY_COMMANDS
 
 program
-  .command('logs')
-  .description('View daemon logs')
-  .argument('[agent]', 'Filter by agent name')
-  .option('-f, --follow', 'Follow log output')
-  .option('-n, --tail <lines>', 'Number of lines to show', '50')
-  .option('--grep <pattern>', 'Filter by pattern')
-  .action(async (agentName: string | undefined, options: { follow?: boolean; tail?: string; grep?: string }) => {
-    const { execSync } = await import('node:child_process');
-    const { platform } = await import('node:os');
-    const logPath = '/var/log/orpheusd.log';
-    const tailNum = parseInt(options.tail || '50', 10);
-
-    try {
-      let cmd: string;
-      if (platform() === 'darwin') {
-        // macOS - read via Lima VM
-        cmd = `limactl shell orpheus -- cat ${logPath} 2>/dev/null || echo ""`;
-      } else {
-        // Linux - read directly
-        cmd = `cat ${logPath} 2>/dev/null || echo ""`;
-      }
-
-      let output = execSync(cmd, { encoding: 'utf-8' });
-
-      // Filter by agent if specified
-      if (agentName) {
-        output = output.split('\n').filter(l => l.includes(agentName)).join('\n');
-      }
-
-      // Filter by grep pattern
-      if (options.grep) {
-        output = output.split('\n').filter(l => l.includes(options.grep!)).join('\n');
-      }
-
-      // Tail to last N lines
-      const lines = output.split('\n').filter(l => l.trim());
-      output = lines.slice(-tailNum).join('\n');
-
-      if (!output.trim()) {
-        console.log('No logs found');
-        return;
-      }
-
-      console.log(output);
-
-      // Follow mode - poll for new logs
-      if (options.follow) {
-        console.log('\n\x1b[2m(following logs, Ctrl+C to exit)\x1b[0m\n');
-        let lastLength = lines.length;
-        setInterval(async () => {
-          try {
-            const newOutput = execSync(cmd, { encoding: 'utf-8' });
-            const newLines = newOutput.split('\n').filter(l => l.trim());
-            if (newLines.length > lastLength) {
-              const diff = newLines.slice(lastLength);
-              diff.forEach(line => console.log(line));
-              lastLength = newLines.length;
-            }
-          } catch {
-            // Ignore errors in follow mode
-          }
-        }, 1000);
-      }
-    } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
-  });
-
-program
   .command('list')
   .description('List deployed agents')
   .option('--images', 'Show base images instead')
@@ -454,96 +383,6 @@ program
   .description('Show running agents (interactive)')
   .action(async () => {
     renderApp(React.createElement(AgentPs));
-  });
-
-program
-  .command('runs')
-  .description('Show execution history')
-  .argument('[agent]', 'Filter by agent name')
-  .option('-n, --limit <count>', 'Number of runs to show', '20')
-  .option('--session <id>', 'Filter by session ID')
-  .option('--worker <id>', 'Filter by worker ID')
-  .option('--status <state>', 'Filter by state (QUEUED/STARTED/COMPLETED/FAILED)')
-  .action(async (agentName: string | undefined, options: { limit?: string; session?: string; worker?: string; status?: string }) => {
-    try {
-      const client = createClient();
-      const limit = parseInt(options.limit || '20', 10);
-
-      // Build filters
-      const filters: ExecLogFilters = {
-        agent: agentName,
-        limit,
-        status: options.status,
-        session: options.session,
-        worker: options.worker,
-      };
-
-      // Call ExecLog API
-      const response = await client.getExecLogs(filters);
-
-      if (!response.data || response.data.length === 0) {
-        console.log('No execution history found');
-        return;
-      }
-
-      // Display header
-      const agentFilter = agentName ? ` for ${agentName}` : '';
-      console.log(`\nExecution History${agentFilter} (${response.total} total)\n`);
-      console.log('─'.repeat(120));
-      console.log(
-        'TIMESTAMP           REQUEST_ID                            STATE      WORKER                          DURATION    SESSION'
-      );
-      console.log('─'.repeat(120));
-
-      // Group entries by request_id to show complete lifecycle
-      const groupedByRequest = new Map<string, typeof response.data>();
-      for (const entry of response.data) {
-        if (!groupedByRequest.has(entry.request_id)) {
-          groupedByRequest.set(entry.request_id, []);
-        }
-        groupedByRequest.get(entry.request_id)!.push(entry);
-      }
-
-      // Display each request's lifecycle
-      for (const [_requestId, entries] of groupedByRequest) {
-        const sortedEntries = entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-
-        for (const entry of sortedEntries) {
-          const timestamp = new Date(entry.timestamp).toLocaleTimeString('en-US', { hour12: false });
-          const requestIdShort = entry.request_id.substring(0, 36);
-          const state = entry.state.padEnd(10);
-          const workerId = (entry.worker_id || '-').padEnd(30);
-          const duration = entry.duration_ms ? `${(entry.duration_ms / 1000).toFixed(1)}s`.padEnd(10) : '-'.padEnd(10);
-          const sessionId = entry.session_id ? entry.session_id.substring(0, 20) + '...' : '-';
-
-          // Color code by state
-          let color = '\x1b[0m'; // Default
-          if (entry.state === 'COMPLETED') color = '\x1b[32m'; // Green
-          if (entry.state === 'FAILED' || entry.state === 'CRASHED') color = '\x1b[31m'; // Red
-          if (entry.state === 'STARTED') color = '\x1b[33m'; // Yellow
-          if (entry.state === 'QUEUED') color = '\x1b[36m'; // Cyan
-
-          console.log(`${color}${timestamp}  ${requestIdShort}  ${state}  ${workerId}  ${duration}  ${sessionId}\x1b[0m`);
-
-          // Show error if present
-          if (entry.error) {
-            console.log(`  ${'\x1b[31m'}└─ Error: ${entry.error}\x1b[0m`);
-          }
-        }
-
-        console.log(''); // Blank line between requests
-      }
-
-      // Footer with pagination info
-      if (response.total_pages > 1) {
-        console.log('─'.repeat(120));
-        console.log(`Page ${response.page}/${response.total_pages} | Showing ${response.count} of ${response.total} total executions`);
-        console.log(`Use --limit to see more, or add filters: --status FAILED --session <id> --worker <id>`);
-      }
-    } catch (err) {
-      console.error(`\x1b[31mError:\x1b[0m ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
   });
 
 program

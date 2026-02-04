@@ -1,26 +1,46 @@
 {
   "name": "orpheus-cli",
-  "version": "0.1.0",
-  "description": "Orpheus CLI - Infrastructure for AI agents",
+  "version": "0.1.4",
+  "description": "Orpheus CLI - The runtime for AI agents",
   "type": "module",
   "bin": {
     "orpheus": "./dist/index.js"
   },
   "main": "./dist/index.js",
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
     "dev": "tsx src/index.ts",
+    "dev:built": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
     "cli",
     "agents",
     "ai",
-    "infrastructure"
+    "infrastructure",
+    "runtime",
+    "autoscaling",
+    "containers",
+    "llm"
   ],
-  "author": "Orpheus",
+  "author": "Orpheus Systems",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arpitnath/orpheus.git",
+    "directory": "cli"
+  },
+  "homepage": "https://orpheus.run",
+  "bugs": {
+    "url": "https://github.com/arpitnath/orpheus/issues"
+  },
   "dependencies": {
     "commander": "^12.0.0",
     "ink": "^5.0.1",

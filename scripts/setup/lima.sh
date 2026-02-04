@@ -131,6 +131,44 @@ else
 fi
 
 # =============================================================================
+# Install Runtimes to Fixed Path
+# =============================================================================
+log_step "Setting up runtimes at /opt/orpheus/runtimes"
+
+PROJECT_ROOT=$(get_project_root)
+RUNTIMES_SOURCE="$PROJECT_ROOT/runtimes"
+RUNTIMES_TARGET="/opt/orpheus/runtimes"
+
+# Check if runtimes source exists
+if [[ ! -d "$RUNTIMES_SOURCE" ]]; then
+    log_warn "Runtimes source not found at $RUNTIMES_SOURCE"
+    log_info "Skipping runtimes installation. You may need to clone the full repo."
+else
+    # Create /opt/orpheus directory
+    limactl shell "$VM_NAME" -- sudo mkdir -p /opt/orpheus
+
+    # Check if already set up correctly
+    CURRENT_LINK=$(limactl shell "$VM_NAME" -- readlink "$RUNTIMES_TARGET" 2>/dev/null || echo "")
+
+    if [[ "$CURRENT_LINK" == "$RUNTIMES_SOURCE" ]]; then
+        log_success "Runtimes already symlinked at $RUNTIMES_TARGET"
+    else
+        # Remove existing (if any) and create symlink
+        limactl shell "$VM_NAME" -- sudo rm -rf "$RUNTIMES_TARGET"
+        limactl shell "$VM_NAME" -- sudo ln -s "$RUNTIMES_SOURCE" "$RUNTIMES_TARGET"
+        log_success "Runtimes symlinked: $RUNTIMES_TARGET -> $RUNTIMES_SOURCE"
+    fi
+
+    # Verify the symlink works
+    if limactl shell "$VM_NAME" -- test -f "$RUNTIMES_TARGET/runtimes.json"; then
+        log_success "Runtimes installation verified"
+    else
+        log_warn "Runtimes symlink created but runtimes.json not found"
+    fi
+fi
+
+
+# =============================================================================
 # Install Go in Lima VM (for building daemon)
 # =============================================================================
 log_step "Checking Go in Lima VM"

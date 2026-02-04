@@ -23,7 +23,7 @@ import type {
 } from '../types/index.js';
 
 //@HTTP_CLIENT
-async function makeRequest<T>(
+export async function makeRequest<T>(
   method: string,
   path: string,
   serverConfig: ServerConfig,
@@ -96,7 +96,7 @@ async function makeRequest<T>(
           let errorMessage = `HTTP ${res.statusCode}`;
           try {
             const errorData = JSON.parse(data);
-            errorMessage = errorData.error || errorData.message || errorMessage;
+            errorMessage = errorData.error?.message || errorData.error || errorData.message || errorMessage;
           } catch {
             if (data) errorMessage = data;
           }
