@@ -21,5 +21,5 @@ func Read() string {
 		}
 	}
 
-	return "aurora-0.1.2"
+	return "aurora-0.1.3"
 }
