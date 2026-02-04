@@ -98,107 +98,13 @@ Current isolation is good but not maximum. Consider gVisor or Firecracker for un
 
 ---
 
-## Security Features in Detail
+## Security Implementation
 
-### Seccomp Syscall Filtering
+**Seccomp Filtering**: Blocks 330+ dangerous syscalls (mount, ptrace, kernel modules, etc.). Allows standard operations (file I/O, networking, process management). Tested with Python, Node.js, Go, and Rust.
 
-**Default action**: Block (SCMP_ACT_ERRNO)
+**Mount Security**: Execution blocked on /tmp, /dev, /proc. Only /agent (rootfs) can execute binaries. /workspace is data-only.
 
-**Allowed syscalls** (~208):
-- File I/O: read, write, open, close, stat, etc.
-- Memory: mmap, munmap, mprotect, brk
-- Process: fork, clone, execve, exit, wait4
-- Networking: socket, connect, bind, listen, send, recv
-- Signals: rt_sigaction, rt_sigprocmask, kill
-
-**Blocked syscalls** (~330+):
-- Administrative: mount, umount2, reboot, sethostname
-- Kernel modules: init_module, delete_module, finit_module
-- Debugging: ptrace, process_vm_readv, process_vm_writev
-- Capabilities: capset, capget
-- Time manipulation: clock_settime, settimeofday
-- Namespace manipulation: unshare, setns
-- ASLR bypass: personality
-- Device creation: mknod
-
-**Compatibility**: Tested with Python 3.x, Node.js 18+, Go 1.20+, Rust 1.70+
-
----
-
-### Mount Security
-
-| Mount Point | Type | Options | Purpose |
-|-------------|------|---------|---------|
-| `/proc` | proc | nosuid, nodev, noexec | Process info (execution blocked) |
-| `/dev` | tmpfs | nosuid, noexec | Device files (execution blocked) |
-| `/tmp` | tmpfs | nosuid, nodev, noexec | Temporary storage (execution blocked) |
-| `/workspace` | bind | nosuid, nodev | Persistent storage (execution allowed for agent code) |
-
-<Info>
-Agents cannot execute binaries from /tmp or /proc, only from /agent (rootfs).
-</Info>
-
----
-
-### Masked Paths (Hidden)
-
-These paths appear as empty read-only files:
-- `/proc/kcore` - Kernel memory dump
-- `/proc/kallsyms` - Kernel symbols
-- `/proc/sys/kernel/core_pattern` - Core dump handler (can execute commands)
-- `/proc/sys/kernel/modprobe` - Module loader path
-- `/sys/firmware` - BIOS/UEFI information
-- `/sys/kernel/debug` - Kernel debug interfaces
-
-### Read-Only Paths
-
-These paths are visible but cannot be modified:
-- `/proc/sys` - Kernel parameters
-- `/sys` - System interfaces
-
----
-
-## Verifying Security
-
-### Check Seccomp is Active
-
-```bash
-# Inspect OCI config
-cat /tmp/orpheus-bundles/*/config.json | jq '.linux.seccomp'
-
-# Should show: DefaultAction: "SCMP_ACT_ERRNO"
-```
-
-### Check NoNewPrivileges
-
-```bash
-cat /tmp/orpheus-bundles/*/config.json | jq '.process.noNewPrivileges'
-
-# Should show: true
-```
-
-### Test Syscall Blocking
-
-```bash
-# Try to mount (should fail with EPERM)
-orpheus exec my-agent --cmd "python3 -c 'import os; os.mount(\"/dev/sda\", \"/mnt\", \"ext4\")'"
-
-# Expected: OSError: [Errno 1] Operation not permitted
-```
-
----
-
-## Known Container Escape CVEs
-
-| CVE | Description | Status |
-|-----|-------------|--------|
-| CVE-2024-21626 | runc leaky file descriptors | ✅ Fixed (runc 1.1.12+) |
-| CVE-2022-0847 | Dirty Pipe (kernel vulnerability) | ✅ Mitigated (seccomp blocks pipe_splice) |
-| CVE-2019-5736 | runc container escape | ✅ Fixed (runc 1.0.0-rc9+) |
-
-<Info>
-Keep runc and kernel updated to latest stable versions.
-</Info>
+**Masked Paths**: Critical kernel interfaces (/proc/kcore, /proc/kallsyms, core_pattern) appear as empty read-only files.
 
 ---
 
