@@ -81,14 +81,14 @@ sudo ./scripts/orchestrators/setup-production.sh
 
 **Time:** ~3-5 minutes on Ubuntu 22.04/24.04.
 
-See [SELF_HOSTING.md](SELF_HOSTING.md) for production configuration, monitoring, and troubleshooting.
+See [SELF_HOSTING.md](https://docs.orpheus.run/guides/self-hosting) for production configuration, monitoring, and troubleshooting.
 
 ### Manual Setup
 
 If you prefer manual control:
 
 ```bash
-# macOS: Install Lima for container execution  
+# macOS: Install Lima for container execution
 brew install lima
 limactl start default
 
@@ -379,4 +379,3 @@ make test
 ## License
 
 Orpheus is open source under the [Apache License 2.0](LICENSE).
-
