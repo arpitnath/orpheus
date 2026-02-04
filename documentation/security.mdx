@@ -206,22 +206,6 @@ If a syscall you need is blocked, file an issue on GitHub.
 
 ---
 
-## Security Scorecard
-
-| Category | Score | Notes |
-|----------|-------|-------|
-| **Container Isolation** | 78/100 | Seccomp + capabilities + namespaces |
-| **Privilege Escalation** | 90/100 | NoNewPrivileges + nosuid + non-root |
-| **Resource Protection** | 85/100 | Memory/PID limits + timeout |
-| **Network Isolation** | 40/100 | Shared network (by design) |
-| **Overall** | **78/100** | Good for trusted code, enhance for multi-tenant |
-
-**Comparison:**
-- Docker default: 75/100
-- Kubernetes default: 72/100
-- gVisor: 95/100
-- Firecracker: 98/100
-
 <Card title="Troubleshooting" icon="wrench" href="/troubleshooting/common-issues">
   Security-related errors →
 </Card>
