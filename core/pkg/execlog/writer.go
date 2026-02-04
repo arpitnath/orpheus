@@ -49,11 +49,16 @@ func NewWriter(execlogDir, agentName string) (*Writer, error) {
 	// Create new writer
 	dbPath := filepath.Join(execlogDir, agentName+".db")
 
-	// Open SQLite database with busy timeout
-	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=5000")
+	// Open SQLite database with busy timeout (increased to 10s for better concurrency)
+	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=10000")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+
+	// Configure connection pool (SQLite = single writer, limit connections)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0) // Reuse connection forever
 
 	// Force connection to actually open (sql.Open is lazy)
 	if err := db.Ping(); err != nil {
@@ -76,6 +81,16 @@ func NewWriter(execlogDir, agentName string) (*Writer, error) {
 
 // createSchema creates the events table and indexes
 func createSchema(db *sql.DB) error {
+	// Enable WAL mode for concurrent reads/writes (critical for production)
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		return fmt.Errorf("enable WAL: %w", err)
+	}
+
+	// Optimize WAL checkpoint behavior (checkpoint every 1000 pages)
+	if _, err := db.Exec("PRAGMA wal_autocheckpoint=1000"); err != nil {
+		return fmt.Errorf("set wal_autocheckpoint: %w", err)
+	}
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS events (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,

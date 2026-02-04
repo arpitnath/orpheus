@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="./.github/logo.png" alt="orpheus.run" width="100%" />
+  <img src="./.github/orpheus_banner.png" alt="orpheus.run" width="100%" />
 </p>
 
 [![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8.svg)](https://go.dev/)
@@ -51,7 +51,7 @@ Built for agents that call LLMs, orchestrate multi-step workflows, and maintain 
 One command sets up everything:
 
 ```bash
-git clone https://github.com/orpheus-systems/orpheus
+git clone https://github.com/arpitnath/orpheus
 cd orpheus
 ./scripts/orchestrators/setup-local.sh
 ```
@@ -66,6 +66,22 @@ This automatically:
 **Time:** ~3-5 minutes on first run.
 
 After setup completes, follow the printed instructions to start the daemon.
+
+### Self-Hosting (Production)
+
+Deploy Orpheus on your own infrastructure:
+
+```bash
+git clone https://github.com/arpitnath/orpheus
+cd orpheus
+sudo ./scripts/orchestrators/setup-production.sh
+```
+
+**What it does:** Installs runc, builds daemon from source, creates systemd service, starts automatically.
+
+**Time:** ~3-5 minutes on Ubuntu 22.04/24.04.
+
+See [SELF_HOSTING.md](SELF_HOSTING.md) for production configuration, monitoring, and troubleshooting.
 
 ### Manual Setup
 
@@ -347,7 +363,7 @@ examples/
 ### Build from Source
 
 ```bash
-git clone https://github.com/orpheus-systems/orpheus
+git clone https://github.com/arpitnath/orpheus
 cd orpheus
 make build
 ```

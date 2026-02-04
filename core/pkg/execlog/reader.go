@@ -19,7 +19,7 @@ func NewReader(execlogDir, agentName string) (*Reader, error) {
 	dbPath := filepath.Join(execlogDir, agentName+".db")
 
 	// Open SQLite database in read-only mode
-	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_busy_timeout=10000")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

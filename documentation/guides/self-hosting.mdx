@@ -1,0 +1,436 @@
+---
+title: 'Self-Hosting Guide'
+description: 'Deploy Orpheus on your own infrastructure in 5 minutes'
+---
+
+## Overview
+
+This guide shows you how to deploy Orpheus on your own infrastructure - whether that's AWS, GCP, Azure, bare metal, or your laptop.
+
+
+<img
+  className="block"
+  src="/assets/selfhost.png"
+  alt="Orpheus Hero"
+/>
+
+**Time to first agent**: ~5 minutes on fresh Ubuntu
+
+**What you'll get**:
+- Production-ready Orpheus daemon
+- Queue-depth autoscaling (not CPU-based like K8s)
+- Workspace persistence and crash recovery
+- Full control over your infrastructure
+
+---
+
+## Prerequisites
+
+### System Requirements
+
+**Minimum (CPU-only)**:
+- Ubuntu 22.04+ or Debian 11+
+- 2GB RAM, 10GB disk
+- Root access (sudo)
+
+**Recommended (with GPU for vLLM)**:
+- Ubuntu 22.04 with NVIDIA GPU
+- 8GB+ RAM, 50GB disk
+- CUDA drivers (see GPU section below)
+
+**For Testing in this Guide**:
+We'll use AWS EC2 for demonstration, but these steps work on:
+- ✅ AWS EC2
+- ✅ GCP Compute Engine
+- ✅ Azure VMs
+- ✅ DigitalOcean Droplets
+- ✅ Bare metal servers
+- ✅ Your laptop (Linux)
+
+---
+
+## Quick Start (Automated)
+
+### Step 1: Clone Repository
+
+```bash
+git clone https://github.com/arpitnath/orpheus.git
+cd orpheus
+```
+
+### Step 2: Run Setup Script
+
+```bash
+sudo ./scripts/orchestrators/setup-production.sh
+```
+
+**What it does** (automatically):
+1. Installs runc + podman (container runtime)
+2. Installs Go (if not present)
+3. Builds Orpheus daemon from source
+4. Installs daemon to /usr/local/bin/
+5. Creates systemd service
+6. Starts daemon automatically
+7. Installs Ollama (optional, for local models)
+
+**Time**: ~3-5 minutes
+
+**Output**:
+```
+✓ Phase 1/5: Installing runc and podman
+✓ Phase 2/5: Installing Orpheus daemon
+✓ Phase 3/5: Configuring systemd service
+✓ Phase 4/5: Installing Ollama
+✓ Phase 5/5: Installing CLI
+
+✓ Orpheus setup complete!
+  Daemon URL: http://localhost:8080
+```
+
+### Step 3: Verify Installation
+
+```bash
+curl http://localhost:8080/v1/health
+```
+
+**Expected response**:
+```json
+{
+  "status": "healthy",
+  "version": "aurora-0.1.2",
+  "uptime_seconds": 12,
+  "running_agents": 0
+}
+```
+
+---
+
+## Connect from Your Machine
+
+### Install CLI (Locally)
+
+On your development machine (not the server):
+
+```bash
+npm install -g @orpheusrun/cli@0.1.4
+```
+
+### Connect to Your Server
+
+```bash
+# Replace with your server's IP
+orpheus connect http://your-server-ip:8080
+
+# Verify connection
+orpheus status
+```
+
+**You should see**:
+```
+● healthy                          💻 your-server-ip
+  Uptime 5m                   http://your-server-ip:8080
+
+  Agents     0    Workers    0    Queue    0
+```
+
+---
+
+## Deploy Your First Agent
+
+### Option 1: Use Example
+
+```bash
+git clone https://github.com/arpitnath/orpheus.git
+cd orpheus/examples/basic/hello-world
+
+orpheus deploy .
+orpheus run hello-world '{"message": "Hello!"}'
+```
+
+**Expected**:
+```json
+{
+  "input_received": {"message": "Hello!"},
+  "operation": "greet",
+  "results": ["Hello, World! (message #1)"]
+}
+```
+
+### Option 2: Create Your Own
+
+Create two files:
+
+**agent.yaml**:
+```yaml
+name: my-agent
+runtime: python3
+module: agent
+entrypoint: handler
+memory: 256
+timeout: 180
+```
+
+**agent.py**:
+```python
+def handler(input_data: dict) -> dict:
+    query = input_data.get('query', '')
+    return {
+        "response": f"Received: {query}",
+        "status": "success"
+    }
+```
+
+**Deploy**:
+```bash
+orpheus deploy .
+orpheus run my-agent '{"query": "test"}'
+```
+
+---
+
+## Testing with OpenAI/Anthropic
+
+For agents that call cloud APIs, add API keys to agent.yaml:
+
+```yaml
+name: calculator
+runtime: python3
+module: calculator
+entrypoint: handler
+
+env:
+  - OPENAI_API_KEY=sk-proj-your-key-here
+```
+
+**Deploy and test**:
+```bash
+orpheus deploy .
+orpheus run calculator '{"query": "what is 25 * 4?"}'
+```
+
+---
+
+## GPU Setup (Optional)
+
+For GPU-accelerated inference with vLLM:
+
+### Option A: Use Deep Learning AMI (Recommended)
+
+**AWS**:
+```bash
+# Launch with Deep Learning Base OSS (Ubuntu 22.04)
+# AMI ID: ami-0f7dad950c97ace0f (us-west-2)
+# Instance: g4dn.xlarge or larger
+```
+
+**Then run setup script** - CUDA already installed!
+
+### Option B: Install CUDA Manually
+
+If using regular Ubuntu with GPU:
+
+```bash
+# 1. Install NVIDIA drivers
+sudo apt-get install -y nvidia-driver-535
+
+# 2. Install CUDA toolkit
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
+sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
+sudo apt-get update
+sudo apt-get -y install cuda
+
+# 3. Verify
+nvidia-smi
+```
+
+**Then run setup script**.
+
+### Install vLLM
+
+```bash
+pip install vllm
+
+# Start vLLM server
+python3 -m vllm.entrypoints.openai.api_server \
+  --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+  --port 8000
+```
+
+**Configure agent** to use vLLM endpoint.
+
+---
+
+## Production Configuration
+
+### Firewall
+
+**Open port 8080** for Orpheus API:
+
+```bash
+# UFW (Ubuntu)
+sudo ufw allow 8080/tcp
+
+# Or restrict to specific IPs
+sudo ufw allow from 10.0.0.0/8 to any port 8080
+```
+
+**AWS Security Group**:
+- Add inbound rule: TCP port 8080 from 0.0.0.0/0 (or your IP)
+
+### Monitoring
+
+**Daemon logs**:
+```bash
+sudo journalctl -u orpheusd -f
+```
+
+**Prometheus metrics**:
+```bash
+curl http://localhost:8080/metrics
+```
+
+Integrate with Grafana, Datadog, or your monitoring stack.
+
+### Resource Limits
+
+Edit `/etc/systemd/system/orpheusd.service`:
+
+```ini
+[Service]
+MemoryLimit=16G
+LimitNOFILE=100000
+LimitNPROC=10000
+```
+
+Then reload:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart orpheusd
+```
+
+---
+
+## Troubleshooting
+
+### Daemon Won't Start
+
+**Check logs**:
+```bash
+sudo journalctl -u orpheusd -n 50
+```
+
+**Common issues**:
+
+1. **Port 8080 in use**:
+   ```bash
+   sudo lsof -i :8080
+   # Kill process or change port
+   ```
+
+2. **Runtimes not found**:
+   ```bash
+   sudo ls /var/lib/orpheus/runtimes/
+   # Should show: python/, nodejs/, runtimes.json
+   ```
+
+3. **Podman not found**:
+   ```bash
+   sudo apt-get install -y podman
+   sudo systemctl restart orpheusd
+   ```
+
+### Agent Deploy Fails
+
+**Check daemon logs during deploy**:
+```bash
+sudo journalctl -u orpheusd -f
+```
+
+**Verify runtimes**:
+```bash
+ls -la /var/lib/orpheus/runtimes/
+```
+
+### Agent Execution Fails
+
+**Check execution logs**:
+```bash
+orpheus execlog list --agent <name> --limit 5
+orpheus execlog crashed
+```
+
+**Common issues**:
+- OOM killed: Increase `memory:` in agent.yaml
+- Timeout: Increase `timeout:` in agent.yaml
+- Missing dependencies: Check requirements.txt or package.json
+
+---
+
+## Tested Environments
+
+This guide has been validated on:
+
+✅ **AWS EC2** (us-west-2)
+- Instance: g4dn.xlarge (Tesla T4 GPU)
+- OS: Ubuntu 22.04 (Deep Learning AMI)
+- Setup time: 5 minutes
+- Test date: February 4, 2026
+
+✅ **Key Features Tested**:
+- Python runtime (OpenAI calculator) - 7.86s execution
+- Node.js runtime (OpenAI calculator) - 3.29s execution
+- Queue-depth autoscaling (1 → 5 workers)
+- ExecLog tracking (45 executions logged)
+- Self-hosted + published CLI integration
+
+---
+
+## What You Need
+
+**Required**:
+- Ubuntu/Debian server (cloud or bare metal)
+- Root access
+- Internet connection
+
+**You provide**:
+- Server infrastructure (AWS/GCP/your own)
+- Domain/IP for access (optional)
+- API keys for LLMs (if using cloud APIs)
+
+**Orpheus provides**:
+- Queue-depth autoscaling runtime
+- Workspace persistence
+- Crash recovery (ExecLog)
+- Multi-runtime support (Python, Node.js)
+- Model server management (Ollama, vLLM)
+
+---
+
+## Next Steps
+
+After self-hosting:
+
+1. **Deploy real agents** - Move beyond examples
+2. **Set up monitoring** - Connect Prometheus metrics to Grafana
+3. **Add TLS** - Use nginx reverse proxy for HTTPS
+4. **Scale horizontally** - Deploy multiple instances (advanced)
+
+**Or migrate to managed cloud** when you're ready:
+- Sign up at [orpheus.run](https://orpheus.run)
+- Same agents, zero infrastructure management
+
+---
+
+## Support
+
+**Documentation**: [orpheus.run/docs](https://orpheus.run/docs)
+**GitHub**: [github.com/arpitnath/orpheus](https://github.com/arpitnath/orpheus)
+**Issues**: [github.com/arpitnath/orpheus/issues](https://github.com/arpitnath/orpheus/issues)
+
+---
+
+## License
+
+MIT - Self-host freely, no restrictions.
