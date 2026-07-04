@@ -23,7 +23,7 @@ GO_VERSION := 1.21
 # Version (from git tag or commit)
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
-LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
+LDFLAGS := -ldflags "-X main.appVersion=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
 
 # Platform detection
 UNAME_S := $(shell uname -s)
@@ -140,7 +140,7 @@ build-linux-amd64: $(BUILD_DIR)
 			-v $(PWD)/$(CORE_DIR):/src:Z \
 			-w /src \
 			docker.io/golang:$(GO_VERSION) \
-			sh -c "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags '-X main.Version=$(VERSION)' -o $(BINARY_NAME) ./cmd/orpheusd"; \
+			sh -c "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags '-X main.appVersion=$(VERSION)' -o $(BINARY_NAME) ./cmd/orpheusd"; \
 		mv $(CORE_DIR)/$(BINARY_NAME) $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64; \
 	fi
 	@echo "$(GREEN)Built: $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64$(RESET)"
@@ -156,7 +156,7 @@ build-linux-arm64: $(BUILD_DIR)
 			-v $(PWD)/$(CORE_DIR):/src:Z \
 			-w /src \
 			docker.io/golang:$(GO_VERSION) \
-			sh -c "CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags '-X main.Version=$(VERSION)' -o $(BINARY_NAME) ./cmd/orpheusd"; \
+			sh -c "CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags '-X main.appVersion=$(VERSION)' -o $(BINARY_NAME) ./cmd/orpheusd"; \
 		mv $(CORE_DIR)/$(BINARY_NAME) $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64; \
 	fi
 	@echo "$(GREEN)Built: $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64$(RESET)"
