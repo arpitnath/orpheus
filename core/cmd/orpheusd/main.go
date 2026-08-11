@@ -15,10 +15,9 @@ import (
 
 	"orpheus/daemon/pkg/daemon"
 	"orpheus/daemon/pkg/execlog"
-	"orpheus/daemon/pkg/version"
 )
 
-var appVersion = version.Read()
+var appVersion string
 
 func main() {
 	// Check for subcommands
